@@ -14,7 +14,7 @@ jobs:
   build:
     strategy:
       matrix:
-        arch: [arm64, armv7, armv7neon, x86, x86_64]
+        arch: [arm64, armv7, armv7neon, x86_64]
         include:
           - arch: arm64
             cross_prefix: aarch64-linux-android-
@@ -40,14 +40,6 @@ jobs:
             cxx: armv7a-linux-androideabi21-clang++
             openssl_arch: android-arm
             android_abi: armeabi-v7a
-          - arch: x86
-            cross_prefix: i686-linux-android-
-            arch_flag: x86
-            cpu: i686
-            cc: i686-linux-android21-clang
-            cxx: i686-linux-android21-clang++
-            openssl_arch: android-x86
-            android_abi: x86
           - arch: x86_64
             cross_prefix: x86_64-linux-android-
             arch_flag: x86_64
@@ -218,7 +210,7 @@ jobs:
         make install
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ffmpeg-android-${{ matrix.arch }}
         path: ${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/ffmpeg/
