@@ -1,0 +1,103 @@
+name: Build FFmpeg for Android
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    env:
+      NDK_VERSION: "26.2.11394342"
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      ANDROID_NDK_ROOT: ${{ github.workspace }}/android-sdk/ndk/${{ env.NDK_VERSION }}
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: 'recursive'
+
+    - name: Set up JDK
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Install NDK
+      run: |
+        sdkmanager --install "ndk;$NDK_VERSION"
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          ninja-build \
+          yasm \
+          nasm \
+          autoconf \
+          automake \
+          libtool \
+          cmake
+
+    - name: Build FFmpeg
+      run: |
+        export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        
+        # Create build directory
+        mkdir -p build && cd build
+        
+        # Configure FFmpeg
+        ../configure \
+          --cross-prefix=aarch64-linux-android- \
+          --sysroot=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
+          --prefix=${{ github.workspace }}/prebuilt/android-arm64/ffmpeg \
+          --enable-version3 \
+          --arch=aarch64 \
+          --cpu=armv8-a \
+          --target-os=android \
+          --enable-neon \
+          --enable-asm \
+          --enable-inline-asm \
+          --ar=llvm-ar \
+          --cc=aarch64-linux-android21-clang \
+          --cxx=aarch64-linux-android21-clang++ \
+          --ranlib=llvm-ranlib \
+          --strip=llvm-strip \
+          --nm=llvm-nm \
+          --disable-autodetect \
+          --enable-cross-compile \
+          --enable-pic \
+          --enable-jni \
+          --enable-optimizations \
+          --enable-swscale \
+          --disable-static \
+          --enable-shared \
+          --enable-pthreads \
+          --enable-v4l2-m2m \
+          --disable-outdev=fbdev \
+          --disable-indev=fbdev \
+          --enable-small \
+          --disable-xmm-clobber-test \
+          --disable-debug \
+          --enable-lto \
+          --disable-neon-clobber-test \
+          --disable-programs \
+          --disable-postproc
+
+        # Build
+        make -j$(nproc)
+        make install
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ffmpeg-android-arm64
+        path: ${{ github.workspace }}/prebuilt/android-arm64/ffmpeg/
