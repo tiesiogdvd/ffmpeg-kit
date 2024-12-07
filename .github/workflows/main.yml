@@ -12,6 +12,11 @@ env:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        arch: [arm-v7a, arm-v7a-neon, arm64-v8a, x86, x86-64]
+      fail-fast: false
+    
     runs-on: ubuntu-latest
     
     env:
@@ -49,35 +54,26 @@ jobs:
           libtool \
           cmake
 
-    - name: Build FFmpeg
+    - name: Build FFmpeg for ${{ matrix.arch }}
       run: |
         chmod +x android.sh
-        ./android.sh -s
+        ./android.sh \
+          --api-level=21 \
+          -s \
+          --enable-android-media-codec \
+          --enable-android-zlib \
+          --enable-gnutls \
+          --enable-gmp \
+          --disable-arm-v7a \
+          --disable-arm-v7a-neon \
+          --disable-arm64-v8a \
+          --disable-x86 \
+          --disable-x86-64 \
+          --enable-${{ matrix.arch }}
 
-    - name: Upload arm64-v8a artifacts
+    - name: Upload ${{ matrix.arch }} artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: ffmpeg-android-arm64-v8a
-        path: prebuilt/android-arm64-v8a/ffmpeg/
-        if-no-files-found: warn
-
-    - name: Upload armeabi-v7a artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: ffmpeg-android-armeabi-v7a
-        path: prebuilt/android-armeabi-v7a/ffmpeg/
-        if-no-files-found: warn
-
-    - name: Upload x86 artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: ffmpeg-android-x86
-        path: prebuilt/android-x86/ffmpeg/
-        if-no-files-found: warn
-
-    - name: Upload x86_64 artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: ffmpeg-android-x86_64
-        path: prebuilt/android-x86_64/ffmpeg/
+        name: ffmpeg-android-${{ matrix.arch }}
+        path: prebuilt/android-${{ matrix.arch }}/ffmpeg/
         if-no-files-found: warn
