@@ -23,17 +23,17 @@ jobs:
             cc: aarch64-linux-android21-clang
             cxx: aarch64-linux-android21-clang++
           - arch: armv7
-            cross_prefix: armv7a-linux-androideabi-
+            cross_prefix: arm-linux-androideabi-
             arch_flag: arm
             cpu: armv7-a
-            cc: armv7a-linux-android21-clang
-            cxx: armv7a-linux-android21-clang++
+            cc: armv7a-linux-androideabi21-clang
+            cxx: armv7a-linux-androideabi21-clang++
           - arch: armv7neon
-            cross_prefix: armv7a-linux-androideabi-
+            cross_prefix: arm-linux-androideabi-
             arch_flag: arm
             cpu: armv7-a
-            cc: armv7a-linux-android21-clang
-            cxx: armv7a-linux-android21-clang++
+            cc: armv7a-linux-androideabi21-clang
+            cxx: armv7a-linux-androideabi21-clang++
           - arch: x86
             cross_prefix: i686-linux-android-
             arch_flag: x86
@@ -92,14 +92,47 @@ jobs:
         cd ffmpeg
         git checkout release/6.0
 
+    - name: Build OpenSSL
+      run: |
+        git clone https://github.com/openssl/openssl.git
+        cd openssl
+        git checkout OpenSSL_1_1_1w
+        export ANDROID_NDK=$ANDROID_NDK_ROOT
+        export PATH=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        
+        case ${{ matrix.arch }} in
+          arm64)
+            ARCH=android-arm64
+            ;;
+          armv7|armv7neon)
+            ARCH=android-arm
+            ;;
+          x86)
+            ARCH=android-x86
+            ;;
+          x86_64)
+            ARCH=android-x86_64
+            ;;
+        esac
+        
+        ./Configure $ARCH -D__ANDROID_API__=21 no-shared
+        make -j$(nproc)
+        sudo make install
+
     - name: Build FFmpeg
       working-directory: ffmpeg
       run: |
         export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
+        
+        EXTRA_FLAGS=""
+        if [ "${{ matrix.arch }}" = "armv7" ] || [ "${{ matrix.arch }}" = "armv7neon" ]; then
+          EXTRA_FLAGS="--extra-cflags=-mfpu=neon --extra-cflags=-mfloat-abi=softfp"
+        fi
         
         ./configure \
           --cross-prefix=${{ matrix.cross_prefix }} \
-          --sysroot=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
+          --sysroot=$TOOLCHAIN/sysroot \
           --prefix=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/ffmpeg \
           --enable-version3 \
           --arch=${{ matrix.arch_flag }} \
@@ -110,6 +143,8 @@ jobs:
           --enable-inline-asm \
           --enable-gpl \
           --enable-openssl \
+          --enable-protocol=http \
+          --enable-protocol=https \
           --ar=llvm-ar \
           --cc=${{ matrix.cc }} \
           --cxx=${{ matrix.cxx }} \
@@ -135,8 +170,10 @@ jobs:
           --disable-neon-clobber-test \
           --disable-programs \
           --enable-nonfree \
-          --disable-postproc
+          --disable-postproc \
+          $EXTRA_FLAGS
 
+        make clean
         make -j$(nproc)
         make install
 
