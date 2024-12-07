@@ -82,7 +82,7 @@ jobs:
           --disable-programs \
           --disable-postproc \
           --disable-swscale \
-          --disable-swresample \
+          --enable-swresample \
           --disable-videotoolbox \
           --disable-vaapi \
           --disable-vdpau \
