@@ -1,4 +1,4 @@
-name: Build FFmpegKit for Android (Audio Optimized)
+name: Build FFmpegKit for Android
 
 on:
   push:
@@ -47,33 +47,34 @@ jobs:
           autoconf \
           automake \
           libtool \
-          cmake \
-          gcc \
-          gperf \
-          texinfo \
-          python3-pip \
-          python3-setuptools \
-          python3-wheel
+          cmake
 
     - name: Build FFmpeg
       run: |
         chmod +x android.sh
-        
         ./android.sh \
-          --enable-android-media-codec \
-          --enable-android-ndk-r26 \
-          --target-sdk-version=21 \
-          --min-sdk-version=21 \
-          --enable-lame \
-          --enable-libilbc \
-          --enable-libvorbis \
-          --enable-opencore-amr \
-          --enable-opus \
-          --enable-shine \
-          --enable-soxr \
-          --enable-speex \
-          --enable-twolame \
-          --enable-vo-amrwbenc
+          --enable-version3 \
+          --enable-neon \
+          --enable-asm \
+          --enable-inline-asm \
+          --enable-cross-compile \
+          --enable-pic \
+          --enable-jni \
+          --enable-optimizations \
+          --enable-swscale \
+          --disable-static \
+          --enable-shared \
+          --enable-pthreads \
+          --enable-v4l2-m2m \
+          --disable-outdev=fbdev \
+          --disable-indev=fbdev \
+          --enable-small \
+          --disable-xmm-clobber-test \
+          --disable-debug \
+          --enable-lto \
+          --disable-neon-clobber-test \
+          --disable-programs \
+          --disable-postproc
 
     - name: Upload arm64-v8a artifacts
       uses: actions/upload-artifact@v3
