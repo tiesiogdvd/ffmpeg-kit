@@ -52,29 +52,7 @@ jobs:
     - name: Build FFmpeg
       run: |
         chmod +x android.sh
-        ./android.sh \
-          --enable-version3 \
-          --enable-neon \
-          --enable-asm \
-          --enable-inline-asm \
-          --enable-cross-compile \
-          --enable-pic \
-          --enable-jni \
-          --enable-optimizations \
-          --enable-swscale \
-          --disable-static \
-          --enable-shared \
-          --enable-pthreads \
-          --enable-v4l2-m2m \
-          --disable-outdev=fbdev \
-          --disable-indev=fbdev \
-          --enable-small \
-          --disable-xmm-clobber-test \
-          --disable-debug \
-          --enable-lto \
-          --disable-neon-clobber-test \
-          --disable-programs \
-          --disable-postproc
+        ./android.sh -s
 
     - name: Upload arm64-v8a artifacts
       uses: actions/upload-artifact@v3
