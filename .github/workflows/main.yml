@@ -134,6 +134,7 @@ jobs:
           --enable-lto \
           --disable-neon-clobber-test \
           --disable-programs \
+          --enable-nonfree \
           --disable-postproc
 
         make -j$(nproc)
