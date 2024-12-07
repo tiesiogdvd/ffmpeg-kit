@@ -7,14 +7,16 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  NDK_VERSION: "26.2.11394342"
+
 jobs:
   build:
     runs-on: ubuntu-latest
     
     env:
-      NDK_VERSION: "26.2.11394342"
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      ANDROID_NDK_ROOT: ${{ github.workspace }}/android-sdk/ndk/${{ env.NDK_VERSION }}
+      ANDROID_NDK_ROOT: ${{ github.workspace }}/android-sdk/ndk/26.2.11394342
 
     steps:
     - uses: actions/checkout@v3
@@ -32,7 +34,7 @@ jobs:
 
     - name: Install NDK
       run: |
-        sdkmanager --install "ndk;$NDK_VERSION"
+        sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
 
     - name: Install build dependencies
       run: |
