@@ -23,6 +23,7 @@ jobs:
             cc: aarch64-linux-android21-clang
             cxx: aarch64-linux-android21-clang++
             openssl_arch: android-arm64
+            android_abi: arm64-v8a
           - arch: armv7
             cross_prefix: arm-linux-androideabi-
             arch_flag: arm
@@ -30,6 +31,7 @@ jobs:
             cc: armv7a-linux-androideabi21-clang
             cxx: armv7a-linux-androideabi21-clang++
             openssl_arch: android-arm
+            android_abi: armeabi-v7a
           - arch: armv7neon
             cross_prefix: arm-linux-androideabi-
             arch_flag: arm
@@ -37,6 +39,7 @@ jobs:
             cc: armv7a-linux-androideabi21-clang
             cxx: armv7a-linux-androideabi21-clang++
             openssl_arch: android-arm
+            android_abi: armeabi-v7a
           - arch: x86
             cross_prefix: i686-linux-android-
             arch_flag: x86
@@ -44,6 +47,7 @@ jobs:
             cc: i686-linux-android21-clang
             cxx: i686-linux-android21-clang++
             openssl_arch: android-x86
+            android_abi: x86
           - arch: x86_64
             cross_prefix: x86_64-linux-android-
             arch_flag: x86_64
@@ -51,6 +55,7 @@ jobs:
             cc: x86_64-linux-android21-clang
             cxx: x86_64-linux-android21-clang++
             openssl_arch: android-x86_64
+            android_abi: x86_64
       fail-fast: false
     
     runs-on: ubuntu-latest
@@ -91,48 +96,62 @@ jobs:
           autoconf \
           automake \
           libtool \
-          cmake
+          cmake \
+          perl
+
+    - name: Build OpenSSL
+      run: |
+        git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
+        cd openssl
+        
+        export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
+        export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        
+        # Create installation directory
+        mkdir -p ${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
+        
+        # Set up environment for OpenSSL build
+        export ANDROID_API=21
+        
+        # Set the correct host for the architecture
+        case "${{ matrix.arch }}" in
+          "arm64")
+            HOST="aarch64-linux-android"
+            ;;
+          "armv7"|"armv7neon")
+            HOST="armv7a-linux-androideabi"
+            ;;
+          "x86")
+            HOST="i686-linux-android"
+            ;;
+          "x86_64")
+            HOST="x86_64-linux-android"
+            ;;
+        esac
+        
+        # Configure OpenSSL
+        ./Configure ${{ matrix.openssl_arch }} \
+          -D__ANDROID_API__=$ANDROID_API \
+          --prefix=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl \
+          --openssldir=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl \
+          -U__ANDROID_API__ \
+          -fPIC \
+          no-shared \
+          no-tests \
+          no-comp \
+          no-engine \
+          no-dso \
+          no-async
+        
+        # Build and install
+        make -j$(nproc) build_sw
+        make install_sw
 
     - name: Download and Extract FFmpeg
       run: |
         git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg
         cd ffmpeg
         git checkout release/6.0
-
-    - name: Build OpenSSL
-      run: |
-        git clone https://github.com/openssl/openssl.git
-        cd openssl
-        git checkout OpenSSL_1_1_1w
-        
-        export ANDROID_NDK=$ANDROID_NDK_ROOT
-        export PATH=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-        export TOOLCHAIN=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64
-        
-        # Set target Android API level
-        export ANDROID_API=21
-        
-        # Set compiler and tools based on architecture
-        if [ "${{ matrix.arch }}" = "arm64" ]; then
-          export CC=aarch64-linux-android$ANDROID_API-clang
-        elif [ "${{ matrix.arch }}" = "armv7" ] || [ "${{ matrix.arch }}" = "armv7neon" ]; then
-          export CC=armv7a-linux-androideabi$ANDROID_API-clang
-        elif [ "${{ matrix.arch }}" = "x86" ]; then
-          export CC=i686-linux-android$ANDROID_API-clang
-        elif [ "${{ matrix.arch }}" = "x86_64" ]; then
-          export CC=x86_64-linux-android$ANDROID_API-clang
-        fi
-        
-        # Configure and build OpenSSL
-        ./Configure ${{ matrix.openssl_arch }} \
-          -D__ANDROID_API__=$ANDROID_API \
-          no-shared \
-          --prefix=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl \
-          --openssldir=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
-        
-        make clean
-        make -j$(nproc)
-        make install_sw
 
     - name: Build FFmpeg
       working-directory: ffmpeg
@@ -145,7 +164,9 @@ jobs:
           EXTRA_FLAGS="--extra-cflags=-mfpu=neon --extra-cflags=-mfloat-abi=softfp"
         fi
         
-        PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib/pkgconfig
+        # Add OpenSSL config
+        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib/pkgconfig
+        export SSL_DIR=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
         
         ./configure \
           --cross-prefix=${{ matrix.cross_prefix }} \
@@ -162,8 +183,8 @@ jobs:
           --enable-openssl \
           --enable-protocol=http \
           --enable-protocol=https \
-          --extra-cflags="-I${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/include" \
-          --extra-ldflags="-L${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib" \
+          --extra-cflags="-I$SSL_DIR/include" \
+          --extra-ldflags="-L$SSL_DIR/lib" \
           --ar=llvm-ar \
           --cc=${{ matrix.cc }} \
           --cxx=${{ matrix.cxx }} \
