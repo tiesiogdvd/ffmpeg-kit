@@ -60,10 +60,10 @@ jobs:
         chmod +x android.sh
         
         ./android.sh \
-          --enable-arch-arm64-v8a \
-          --enable-arch-arm-v7a \
-          --enable-arch-x86 \
-          --enable-arch-x86-64 \
+          --enable-arm-v7a-neon \
+          --enable-arm64-v8a \
+          --enable-x86 \
+          --enable-x86-64 \
           --enable-android-ndk-r26 \
           --target-sdk-version=21 \
           --min-sdk-version=21 \
