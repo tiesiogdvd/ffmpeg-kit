@@ -22,37 +22,42 @@ jobs:
             cpu: armv8-a
             cc: aarch64-linux-android21-clang
             cxx: aarch64-linux-android21-clang++
+            openssl_arch: android-arm64
           - arch: armv7
             cross_prefix: arm-linux-androideabi-
             arch_flag: arm
             cpu: armv7-a
             cc: armv7a-linux-androideabi21-clang
             cxx: armv7a-linux-androideabi21-clang++
+            openssl_arch: android-arm
           - arch: armv7neon
             cross_prefix: arm-linux-androideabi-
             arch_flag: arm
             cpu: armv7-a
             cc: armv7a-linux-androideabi21-clang
             cxx: armv7a-linux-androideabi21-clang++
+            openssl_arch: android-arm
           - arch: x86
             cross_prefix: i686-linux-android-
             arch_flag: x86
             cpu: i686
             cc: i686-linux-android21-clang
             cxx: i686-linux-android21-clang++
+            openssl_arch: android-x86
           - arch: x86_64
             cross_prefix: x86_64-linux-android-
             arch_flag: x86_64
             cpu: x86-64
             cc: x86_64-linux-android21-clang
             cxx: x86_64-linux-android21-clang++
+            openssl_arch: android-x86_64
       fail-fast: false
     
     runs-on: ubuntu-latest
     
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      ANDROID_NDK_ROOT: ${{ github.workspace }}/android-sdk/ndk/26.2.11394342
+      ANDROID_NDK_ROOT: ${{ github.workspace }}/android-ndk
 
     steps:
     - uses: actions/checkout@v3
@@ -65,12 +70,14 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-
-    - name: Install NDK
+    - name: Download and Setup NDK
       run: |
-        sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
+        mkdir -p ${{ github.workspace }}/android-ndk
+        wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+        unzip -q android-ndk-r26b-linux.zip
+        mv android-ndk-r26b/* ${{ github.workspace }}/android-ndk/
+        rm -rf android-ndk-r26b android-ndk-r26b-linux.zip
+        echo "ANDROID_NDK_ROOT=${{ github.workspace }}/android-ndk" >> $GITHUB_ENV
 
     - name: Install build dependencies
       run: |
@@ -97,27 +104,35 @@ jobs:
         git clone https://github.com/openssl/openssl.git
         cd openssl
         git checkout OpenSSL_1_1_1w
+        
         export ANDROID_NDK=$ANDROID_NDK_ROOT
         export PATH=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        export TOOLCHAIN=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64
         
-        case ${{ matrix.arch }} in
-          arm64)
-            ARCH=android-arm64
-            ;;
-          armv7|armv7neon)
-            ARCH=android-arm
-            ;;
-          x86)
-            ARCH=android-x86
-            ;;
-          x86_64)
-            ARCH=android-x86_64
-            ;;
-        esac
+        # Set target Android API level
+        export ANDROID_API=21
         
-        ./Configure $ARCH -D__ANDROID_API__=21 no-shared
+        # Set compiler and tools based on architecture
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          export CC=aarch64-linux-android$ANDROID_API-clang
+        elif [ "${{ matrix.arch }}" = "armv7" ] || [ "${{ matrix.arch }}" = "armv7neon" ]; then
+          export CC=armv7a-linux-androideabi$ANDROID_API-clang
+        elif [ "${{ matrix.arch }}" = "x86" ]; then
+          export CC=i686-linux-android$ANDROID_API-clang
+        elif [ "${{ matrix.arch }}" = "x86_64" ]; then
+          export CC=x86_64-linux-android$ANDROID_API-clang
+        fi
+        
+        # Configure and build OpenSSL
+        ./Configure ${{ matrix.openssl_arch }} \
+          -D__ANDROID_API__=$ANDROID_API \
+          no-shared \
+          --prefix=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl \
+          --openssldir=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
+        
+        make clean
         make -j$(nproc)
-        sudo make install
+        make install_sw
 
     - name: Build FFmpeg
       working-directory: ffmpeg
@@ -129,6 +144,8 @@ jobs:
         if [ "${{ matrix.arch }}" = "armv7" ] || [ "${{ matrix.arch }}" = "armv7neon" ]; then
           EXTRA_FLAGS="--extra-cflags=-mfpu=neon --extra-cflags=-mfloat-abi=softfp"
         fi
+        
+        PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib/pkgconfig
         
         ./configure \
           --cross-prefix=${{ matrix.cross_prefix }} \
@@ -145,6 +162,8 @@ jobs:
           --enable-openssl \
           --enable-protocol=http \
           --enable-protocol=https \
+          --extra-cflags="-I${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/include" \
+          --extra-ldflags="-L${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib" \
           --ar=llvm-ar \
           --cc=${{ matrix.cc }} \
           --cxx=${{ matrix.cxx }} \
