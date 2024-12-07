@@ -36,57 +36,34 @@ jobs:
       run: |
         sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
 
-    - name: Check available options
+    - name: Install build dependencies
       run: |
-        chmod +x android.sh
-        ./android.sh --help
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          ninja-build \
+          yasm \
+          nasm \
+          autoconf \
+          automake \
+          libtool \
+          cmake \
+          gcc \
+          gperf \
+          texinfo \
+          python3-pip \
+          python3-setuptools \
+          python3-wheel
 
     - name: Build FFmpeg
       run: |
+        chmod +x android.sh
+        
         ./android.sh \
-          --enable-armeabi-v7a \
-          --enable-arm64 \
-          --enable-x86 \
-          --enable-x86_64 \
+          --enable-android-media-codec \
           --enable-android-ndk-r26 \
           --target-sdk-version=21 \
           --min-sdk-version=21 \
-          --enable-ffmpeg-version=6.0 \
-          --enable-version3 \
-          --enable-pic \
-          --enable-jni \
-          --enable-optimizations \
-          --disable-static \
-          --enable-shared \
-          --enable-pthreads \
-          --enable-small \
-          --disable-debug \
-          --enable-lto \
-          --disable-neon-clobber-test \
-          --disable-programs \
-          --disable-postproc \
-          --disable-swscale \
-          --enable-swresample \
-          --disable-videotoolbox \
-          --disable-vaapi \
-          --disable-vdpau \
-          --disable-cuda \
-          --disable-cuvid \
-          --disable-nvenc \
-          --disable-nvdec \
-          --disable-v4l2-m2m \
-          --disable-dxva2 \
-          --disable-d3d11va \
-          --disable-ffplay \
-          --disable-ffprobe \
-          --disable-network \
-          --disable-protocols \
-          --disable-filters \
-          --disable-doc \
-          --disable-htmlpages \
-          --disable-manpages \
-          --disable-podpages \
-          --disable-txtpages \
           --enable-lame \
           --enable-libilbc \
           --enable-libvorbis \
@@ -96,20 +73,7 @@ jobs:
           --enable-soxr \
           --enable-speex \
           --enable-twolame \
-          --enable-vo-amrwbenc \
-          --enable-libopus \
-          --enable-fft \
-          --enable-rdft \
-          --enable-avfilter \
-          --enable-filter=aresample \
-          --enable-filter=volume \
-          --enable-filter=anull \
-          --enable-filter=aformat \
-          --enable-filter=amix \
-          --enable-filter=afade \
-          --enable-filter=equalizer \
-          --enable-filter=dynaudnorm \
-          --enable-filter=silenceremove
+          --enable-vo-amrwbenc
 
     - name: Upload arm64-v8a artifacts
       uses: actions/upload-artifact@v3
