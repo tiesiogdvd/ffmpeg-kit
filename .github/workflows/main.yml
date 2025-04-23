@@ -56,7 +56,6 @@ jobs:
             cxx: i686-linux-android21-clang++
             openssl_arch: android-x86
             android_abi: x86
-            extra_asm_flags: "-DPIC"
       fail-fast: false
     
     runs-on: ubuntu-latest
@@ -165,6 +164,13 @@ jobs:
           EXTRA_FLAGS="--extra-cflags=-mfpu=neon --extra-cflags=-mfloat-abi=softfp"
         fi
         
+        if [ "${{ matrix.arch }}" = "x86" ]; then
+          # Special handling for x86 to fix PIC relocation errors
+          EXTRA_FLAGS="$EXTRA_FLAGS --extra-cflags=-fPIC --extra-ldflags=-fPIC --extra-cxxflags=-fPIC"
+          # Disable ASM for x86 to avoid relocation issues
+          EXTRA_FLAGS="$EXTRA_FLAGS --disable-asm --disable-inline-asm"
+        fi
+        
         # Add OpenSSL config
         export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib/pkgconfig
         export SSL_DIR=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
@@ -184,6 +190,8 @@ jobs:
           --enable-openssl \
           --enable-protocol=http \
           --enable-protocol=https \
+          --enable-protocol=file \
+          --enable-protocol=tcp \
           --extra-cflags="-I$SSL_DIR/include" \
           --extra-ldflags="-L$SSL_DIR/lib" \
           --ar=llvm-ar \
@@ -218,7 +226,7 @@ jobs:
         make -j$(nproc)
         make install
 
-    - name: Upload artifactss
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ffmpeg-android-${{ matrix.arch }}
