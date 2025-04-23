@@ -99,6 +99,24 @@ jobs:
           cmake \
           perl
 
+    - name: Build CPU Features
+      run: |
+        git clone https://github.com/google/cpu_features.git
+        cd cpu_features
+        mkdir build && cd build
+        
+        # Create installation directory for CPU features
+        mkdir -p ${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/cpu-features/lib
+        
+        cmake .. -DCMAKE_SYSTEM_NAME=Android \
+          -DCMAKE_SYSTEM_VERSION=21 \
+          -DCMAKE_ANDROID_ARCH_ABI=${{ matrix.android_abi }} \
+          -DCMAKE_ANDROID_NDK=$ANDROID_NDK_ROOT \
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/cpu-features
+        
+        make -j$(nproc)
+        make install
+
     - name: Build OpenSSL
       run: |
         git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
@@ -174,11 +192,13 @@ jobs:
         # Add OpenSSL config
         export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib/pkgconfig
         export SSL_DIR=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
+        export CPU_FEATURES_DIR=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/cpu-features
         
         ./configure \
           --cross-prefix=${{ matrix.cross_prefix }} \
           --sysroot=$TOOLCHAIN/sysroot \
           --prefix=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/ffmpeg \
+          --pkg-config=$(which pkg-config) \
           --enable-version3 \
           --arch=${{ matrix.arch_flag }} \
           --cpu=${{ matrix.cpu }} \
@@ -194,6 +214,7 @@ jobs:
           --enable-protocol=tcp \
           --extra-cflags="-I$SSL_DIR/include" \
           --extra-ldflags="-L$SSL_DIR/lib" \
+          --extra-libs="-L$CPU_FEATURES_DIR/lib -lndk_compat" \
           --ar=llvm-ar \
           --cc=${{ matrix.cc }} \
           --cxx=${{ matrix.cxx }} \
@@ -209,7 +230,7 @@ jobs:
           --disable-static \
           --enable-shared \
           --enable-pthreads \
-          --disable-v4l2-m2m \
+          --enable-v4l2-m2m \
           --disable-outdev=fbdev \
           --disable-indev=fbdev \
           --enable-small \
