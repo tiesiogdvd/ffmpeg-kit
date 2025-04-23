@@ -209,7 +209,7 @@ jobs:
         make -j$(nproc)
         make install
 
-    - name: Upload artifacts
+    - name: Upload artifactss
       uses: actions/upload-artifact@v4
       with:
         name: ffmpeg-android-${{ matrix.arch }}
