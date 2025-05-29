@@ -143,16 +143,25 @@ jobs:
         make -j$(nproc)
         make install_sw
 
-    - name: Create OpenSSL pkg-config files
-      if: matrix.target_os == 'mingw32'
+    - name: Fix OpenSSL lib directory and create pkg-config files
       run: |
-        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig
-        
-        # Set the actual paths
         SSL_PREFIX="${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl"
         
-        # Create openssl.pc
-        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc << EOF
+        # Check if OpenSSL installed to lib64 instead of lib
+        if [ -d "$SSL_PREFIX/lib64" ] && [ ! -d "$SSL_PREFIX/lib" ]; then
+          echo "=== Moving lib64 to lib ==="
+          mv "$SSL_PREFIX/lib64" "$SSL_PREFIX/lib"
+        fi
+        
+        # Ensure lib directory exists
+        mkdir -p "$SSL_PREFIX/lib"
+        
+        # For Windows, create pkg-config files
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          mkdir -p "$SSL_PREFIX/lib/pkgconfig"
+          
+          # Create openssl.pc
+          cat > "$SSL_PREFIX/lib/pkgconfig/openssl.pc" << EOF
         prefix=${SSL_PREFIX}
         exec_prefix=\${prefix}
         libdir=\${exec_prefix}/lib
@@ -163,9 +172,9 @@ jobs:
         Version: 3.0.12
         Requires: libssl libcrypto
         EOF
-        
-        # Create libssl.pc
-        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc << EOF
+          
+          # Create libssl.pc
+          cat > "$SSL_PREFIX/lib/pkgconfig/libssl.pc" << EOF
         prefix=${SSL_PREFIX}
         exec_prefix=\${prefix}
         libdir=\${exec_prefix}/lib
@@ -179,31 +188,22 @@ jobs:
         Libs.private: -lws2_32 -lgdi32 -lcrypt32
         Cflags: -I\${includedir}
         EOF
-        
-        # Create libcrypto.pc
-        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc << EOF
+          
+          # Create libcrypto.pc
+          cat > "$SSL_PREFIX/lib/pkgconfig/libcrypto.pc" << EOF
         prefix=${SSL_PREFIX}
         exec_prefix=\${prefix}
         libdir=\${exec_prefix}/lib
         includedir=\${prefix}/include
         
-        Name: OpenSSL-libcrypto  
+        Name: OpenSSL-libcrypto
         Description: OpenSSL cryptography library
         Version: 3.0.12
         Libs: -L\${libdir} -lcrypto
         Libs.private: -lws2_32 -lgdi32 -lcrypt32
         Cflags: -I\${includedir}
         EOF
-        
-        # Verify files were created and show their content
-        echo "=== OpenSSL pkg-config files created ==="
-        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/
-        echo "=== Content of openssl.pc ==="
-        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc
-        echo "=== Content of libssl.pc ==="
-        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc
-        echo "=== Content of libcrypto.pc ==="
-        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc
+        fi
 
     - name: Verify OpenSSL installation
       run: |
@@ -221,6 +221,10 @@ jobs:
           pkg-config --exists libcrypto && echo "libcrypto pkg-config found" || echo "libcrypto pkg-config NOT found"
           echo "=== pkg-config output ==="
           pkg-config --cflags --libs openssl || echo "Failed to get OpenSSL flags"
+          echo "=== pkg-config files content ==="
+          ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/
+          echo "--- openssl.pc ---"
+          cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc || echo "No openssl.pc"
         fi
 
     - name: Download and Extract FFmpeg
@@ -238,6 +242,14 @@ jobs:
         echo "=== Environment verification ==="
         echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
         echo "SSL_DIR: $SSL_DIR"
+        
+        # Test if OpenSSL can be found
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          echo "=== Testing pkg-config before FFmpeg configure ==="
+          pkg-config --exists openssl && echo "✓ OpenSSL found" || echo "✗ OpenSSL NOT found"
+          pkg-config --cflags openssl || echo "Failed to get cflags"
+          pkg-config --libs openssl || echo "Failed to get libs"
+        fi
         
         # Base configuration
         CONFIGURE_FLAGS="
