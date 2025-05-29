@@ -86,7 +86,6 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo apt-get update
-        # Retry on failure and use --fix-missing for network issues
         sudo apt-get install -y --fix-missing \
           build-essential \
           pkg-config \
@@ -127,7 +126,6 @@ jobs:
           export AR=${{ matrix.cross_prefix }}ar
           export RANLIB=${{ matrix.cross_prefix }}ranlib
           export RC=${{ matrix.cross_prefix }}windres
-          # Don't use --cross-compile-prefix when CC is already set
           CROSS_PREFIX=""
         else
           CROSS_PREFIX="--cross-compile-prefix=${{ matrix.cross_prefix }}"
@@ -144,50 +142,85 @@ jobs:
         # Build and install
         make -j$(nproc)
         make install_sw
+
+    - name: Create OpenSSL pkg-config files
+      if: matrix.target_os == 'mingw32'
+      run: |
+        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig
         
-        # Create pkg-config file for Windows builds
-        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig
-          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc << 'EOF'
-        prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
-        exec_prefix=${prefix}
-        libdir=${exec_prefix}/lib
-        includedir=${prefix}/include
+        # Set the actual paths
+        SSL_PREFIX="${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl"
+        
+        # Create openssl.pc
+        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc << EOF
+        prefix=${SSL_PREFIX}
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
         
         Name: OpenSSL
         Description: Secure Sockets Layer and cryptography libraries and tools
         Version: 3.0.12
-        Requires: 
-        Libs: -L${libdir} -lssl -lcrypto -lws2_32 -lgdi32 -lcrypt32
-        Cflags: -I${includedir}
+        Requires: libssl libcrypto
         EOF
-          
-          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc << 'EOF'
-        prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
-        exec_prefix=${prefix}
-        libdir=${exec_prefix}/lib
-        includedir=${prefix}/include
+        
+        # Create libssl.pc
+        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc << EOF
+        prefix=${SSL_PREFIX}
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
         
         Name: OpenSSL-libssl
         Description: Secure Sockets Layer and cryptography libraries
         Version: 3.0.12
         Requires: libcrypto
-        Libs: -L${libdir} -lssl
-        Cflags: -I${includedir}
+        Libs: -L\${libdir} -lssl
+        Libs.private: -lws2_32 -lgdi32 -lcrypt32
+        Cflags: -I\${includedir}
         EOF
-          
-          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc << 'EOF'
-        prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
-        exec_prefix=${prefix}
-        libdir=${exec_prefix}/lib
-        includedir=${prefix}/include
         
-        Name: OpenSSL-libcrypto
+        # Create libcrypto.pc
+        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc << EOF
+        prefix=${SSL_PREFIX}
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
+        
+        Name: OpenSSL-libcrypto  
         Description: OpenSSL cryptography library
         Version: 3.0.12
-        Libs: -L${libdir} -lcrypto -lws2_32 -lgdi32 -lcrypt32
-        Cflags: -I${includedir}
+        Libs: -L\${libdir} -lcrypto
+        Libs.private: -lws2_32 -lgdi32 -lcrypt32
+        Cflags: -I\${includedir}
         EOF
+        
+        # Verify files were created and show their content
+        echo "=== OpenSSL pkg-config files created ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/
+        echo "=== Content of openssl.pc ==="
+        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc
+        echo "=== Content of libssl.pc ==="
+        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc
+        echo "=== Content of libcrypto.pc ==="
+        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc
+
+    - name: Verify OpenSSL installation
+      run: |
+        echo "=== OpenSSL installation verification ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/
+        echo "=== Include directory ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/include/
+        echo "=== Lib directory ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          echo "=== PKG_CONFIG_PATH test ==="
+          export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
+          pkg-config --exists openssl && echo "OpenSSL pkg-config found" || echo "OpenSSL pkg-config NOT found"
+          pkg-config --exists libssl && echo "libssl pkg-config found" || echo "libssl pkg-config NOT found"  
+          pkg-config --exists libcrypto && echo "libcrypto pkg-config found" || echo "libcrypto pkg-config NOT found"
+          echo "=== pkg-config output ==="
+          pkg-config --cflags --libs openssl || echo "Failed to get OpenSSL flags"
         fi
 
     - name: Download and Extract FFmpeg
@@ -201,6 +234,10 @@ jobs:
       run: |
         export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
         export SSL_DIR=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
+        
+        echo "=== Environment verification ==="
+        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+        echo "SSL_DIR: $SSL_DIR"
         
         # Base configuration
         CONFIGURE_FLAGS="
@@ -263,7 +300,7 @@ jobs:
         if [ "${{ matrix.target_os }}" = "linux" ]; then
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
-          elif [ "${{ matrix.arch }}" = "armv7" ]; then
+          elif [ "${{ matrix.arch }}" = "armv7" ]; then  
             CONFIGURE_FLAGS="$CONFIGURE_FLAGS 
               --enable-neon
               --extra-cflags=-mfpu=neon
@@ -273,6 +310,7 @@ jobs:
         fi
         
         # Configure FFmpeg
+        echo "=== Configuring FFmpeg ==="
         ./configure $CONFIGURE_FLAGS
         
         # Build
