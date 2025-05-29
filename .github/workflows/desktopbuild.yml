@@ -49,7 +49,7 @@ jobs:
             packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
             cross_prefix: arm-linux-gnueabihf-
             
-          # Windows builds
+          # Windows builds (x86_64 and x86 only - ARM64 toolchain not available)
           - name: windows-x86_64
             os: ubuntu-latest
             target_os: mingw32
@@ -73,18 +73,6 @@ jobs:
             openssl_arch: mingw
             packages: "gcc-mingw-w64-i686 g++-mingw-w64-i686 mingw-w64-tools"
             cross_prefix: i686-w64-mingw32-
-            
-          - name: windows-arm64
-            os: ubuntu-latest
-            target_os: mingw32
-            arch: arm64
-            cc: aarch64-w64-mingw32-gcc
-            cxx: aarch64-w64-mingw32-g++
-            configure_arch: aarch64
-            cpu: armv8-a
-            openssl_arch: mingw64
-            packages: "gcc-mingw-w64-aarch64 g++-mingw-w64-aarch64 mingw-w64-tools"
-            cross_prefix: aarch64-w64-mingw32-
             
       fail-fast: false
     
@@ -110,6 +98,7 @@ jobs:
           cmake \
           perl \
           ${{ matrix.packages }}
+
     - name: Build OpenSSL
       run: |
         git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
@@ -127,15 +116,13 @@ jobs:
           export RC=${{ matrix.cross_prefix }}windres
         fi
         
-        # Configure OpenSSL
+        # Configure OpenSSL (removed invalid no-docs option)
         ./Configure ${{ matrix.openssl_arch }} \
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
           --openssldir=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
           --cross-compile-prefix=${{ matrix.cross_prefix }} \
           no-shared \
-          no-tests \
-          no-docs \
-          -static
+          no-tests
         
         # Build and install
         make -j$(nproc)
@@ -144,52 +131,54 @@ jobs:
         # Create pkg-config file for Windows builds
         if [ "${{ matrix.target_os }}" = "mingw32" ]; then
           mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig
-          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc << EOF
+          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc << 'EOF'
         prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
-        exec_prefix=\${prefix}
-        libdir=\${exec_prefix}/lib
-        includedir=\${prefix}/include
+        exec_prefix=${prefix}
+        libdir=${exec_prefix}/lib
+        includedir=${prefix}/include
         
         Name: OpenSSL
         Description: Secure Sockets Layer and cryptography libraries and tools
         Version: 3.0.12
         Requires: 
-        Libs: -L\${libdir} -lssl -lcrypto -lws2_32 -lgdi32 -lcrypt32
-        Cflags: -I\${includedir}
+        Libs: -L${libdir} -lssl -lcrypto -lws2_32 -lgdi32 -lcrypt32
+        Cflags: -I${includedir}
         EOF
           
-          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc << EOF
+          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc << 'EOF'
         prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
-        exec_prefix=\${prefix}
-        libdir=\${exec_prefix}/lib
-        includedir=\${prefix}/include
+        exec_prefix=${prefix}
+        libdir=${exec_prefix}/lib
+        includedir=${prefix}/include
         
         Name: OpenSSL-libssl
         Description: Secure Sockets Layer and cryptography libraries
         Version: 3.0.12
         Requires: libcrypto
-        Libs: -L\${libdir} -lssl
-        Cflags: -I\${includedir}
+        Libs: -L${libdir} -lssl
+        Cflags: -I${includedir}
         EOF
           
-          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc << EOF
+          cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc << 'EOF'
         prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
-        exec_prefix=\${prefix}
-        libdir=\${exec_prefix}/lib
-        includedir=\${prefix}/include
+        exec_prefix=${prefix}
+        libdir=${exec_prefix}/lib
+        includedir=${prefix}/include
         
         Name: OpenSSL-libcrypto
         Description: OpenSSL cryptography library
         Version: 3.0.12
-        Libs: -L\${libdir} -lcrypto -lws2_32 -lgdi32 -lcrypt32
-        Cflags: -I\${includedir}
+        Libs: -L${libdir} -lcrypto -lws2_32 -lgdi32 -lcrypt32
+        Cflags: -I${includedir}
         EOF
         fi
+
     - name: Download and Extract FFmpeg
       run: |
         git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg
         cd ffmpeg
         git checkout release/6.1
+
     - name: Build FFmpeg
       working-directory: ffmpeg
       run: |
@@ -253,18 +242,17 @@ jobs:
           "
         fi
         
-        # ARM-specific optimizations
-        if [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ matrix.target_os }}" = "linux" ]; then
-          CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
-        elif [ "${{ matrix.arch }}" = "armv7" ]; then
-          CONFIGURE_FLAGS="$CONFIGURE_FLAGS 
-            --enable-neon
-            --extra-cflags=-mfpu=neon
-            --extra-cflags=-mfloat-abi=hard
-          "
-        elif [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          # Windows ARM64 specific flags
-          CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
+        # ARM-specific optimizations (Linux only)
+        if [ "${{ matrix.target_os }}" = "linux" ]; then
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
+          elif [ "${{ matrix.arch }}" = "armv7" ]; then
+            CONFIGURE_FLAGS="$CONFIGURE_FLAGS 
+              --enable-neon
+              --extra-cflags=-mfpu=neon
+              --extra-cflags=-mfloat-abi=hard
+            "
+          fi
         fi
         
         # Configure FFmpeg
@@ -274,6 +262,7 @@ jobs:
         make clean
         make -j$(nproc)
         make install
+
     - name: Create tarball
       run: |
         cd ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
@@ -284,6 +273,7 @@ jobs:
           # For Linux, create a tarball
           tar -czf ../../../ffmpeg-${{ matrix.name }}.tar.gz .
         fi
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -291,6 +281,7 @@ jobs:
         path: |
           ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/
           ${{ github.workspace }}/ffmpeg-${{ matrix.name }}.*
+
   create-release:
     needs: build
     runs-on: ubuntu-latest
