@@ -1,0 +1,200 @@
+name: Build FFmpeg for Linux
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        arch: [x86_64, arm64, armv7]
+        include:
+          - arch: x86_64
+            cc: gcc
+            cxx: g++
+            configure_arch: x86_64
+            cpu: x86-64
+            openssl_arch: linux-x86_64
+            packages: ""
+          - arch: arm64
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
+            configure_arch: aarch64
+            cpu: armv8-a
+            openssl_arch: linux-aarch64
+            packages: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
+            cross_prefix: aarch64-linux-gnu-
+          - arch: armv7
+            cc: arm-linux-gnueabihf-gcc
+            cxx: arm-linux-gnueabihf-g++
+            configure_arch: arm
+            cpu: armv7-a
+            openssl_arch: linux-armv4
+            packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
+            cross_prefix: arm-linux-gnueabihf-
+      fail-fast: false
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          pkg-config \
+          ninja-build \
+          yasm \
+          nasm \
+          autoconf \
+          automake \
+          libtool \
+          cmake \
+          perl \
+          ${{ matrix.packages }}
+
+    - name: Build OpenSSL
+      run: |
+        git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
+        cd openssl
+        
+        # Create installation directory
+        mkdir -p ${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl
+        
+        # Configure OpenSSL based on architecture
+        if [ "${{ matrix.arch }}" = "x86_64" ]; then
+          ./Configure linux-x86_64 \
+            --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
+            --openssldir=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
+            no-shared \
+            no-tests
+        elif [ "${{ matrix.arch }}" = "arm64" ]; then
+          ./Configure linux-aarch64 \
+            --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
+            --openssldir=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
+            --cross-compile-prefix=aarch64-linux-gnu- \
+            no-shared \
+            no-tests
+        elif [ "${{ matrix.arch }}" = "armv7" ]; then
+          ./Configure linux-armv4 \
+            --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
+            --openssldir=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
+            --cross-compile-prefix=arm-linux-gnueabihf- \
+            no-shared \
+            no-tests
+        fi
+        
+        # Build and install
+        make -j$(nproc)
+        make install_sw
+
+    - name: Download and Extract FFmpeg
+      run: |
+        git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg
+        cd ffmpeg
+        git checkout release/6.1
+
+    - name: Build FFmpeg
+      working-directory: ffmpeg
+      run: |
+        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
+        export SSL_DIR=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl
+        
+        # Base configuration
+        CONFIGURE_FLAGS="
+          --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/ffmpeg
+          --pkg-config=pkg-config
+          --enable-version3
+          --arch=${{ matrix.configure_arch }}
+          --cpu=${{ matrix.cpu }}
+          --enable-gpl
+          --enable-nonfree
+          --enable-openssl
+          --enable-protocol=http
+          --enable-protocol=https
+          --enable-protocol=file
+          --enable-protocol=tcp
+          --extra-cflags=-I$SSL_DIR/include
+          --extra-ldflags=-L$SSL_DIR/lib
+          --enable-pic
+          --enable-optimizations
+          --enable-swscale
+          --enable-shared
+          --disable-static
+          --enable-pthreads
+          --disable-debug
+          --enable-lto
+          --disable-doc
+          --disable-htmlpages
+          --disable-manpages
+          --disable-podpages
+          --disable-txtpages
+        "
+        
+        # Architecture-specific flags
+        if [ "${{ matrix.arch }}" != "x86_64" ]; then
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS
+            --enable-cross-compile
+            --cross-prefix=${{ matrix.cross_prefix }}
+            --cc=${{ matrix.cc }}
+            --cxx=${{ matrix.cxx }}
+          "
+        fi
+        
+        # ARM-specific optimizations
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
+        elif [ "${{ matrix.arch }}" = "armv7" ]; then
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS 
+            --enable-neon
+            --extra-cflags=-mfpu=neon
+            --extra-cflags=-mfloat-abi=hard
+          "
+        fi
+        
+        # Configure FFmpeg
+        ./configure $CONFIGURE_FLAGS
+        
+        # Build
+        make clean
+        make -j$(nproc)
+        make install
+
+    - name: Create tarball
+      run: |
+        cd ${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/ffmpeg
+        tar -czf ../../../ffmpeg-linux-${{ matrix.arch }}.tar.gz .
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ffmpeg-linux-${{ matrix.arch }}
+        path: |
+          ${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/ffmpeg/
+          ${{ github.workspace }}/ffmpeg-linux-${{ matrix.arch }}.tar.gz
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          ffmpeg-linux-*/ffmpeg-linux-*.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
