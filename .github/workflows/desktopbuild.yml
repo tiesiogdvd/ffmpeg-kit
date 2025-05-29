@@ -1,4 +1,4 @@
-name: Build FFmpeg for Linux
+name: Build FFmpeg for Linux and Windows
 
 on:
   push:
@@ -11,16 +11,24 @@ jobs:
   build:
     strategy:
       matrix:
-        arch: [x86_64, arm64, armv7]
         include:
-          - arch: x86_64
+          # Linux builds
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target_os: linux
+            arch: x86_64
             cc: gcc
             cxx: g++
             configure_arch: x86_64
             cpu: x86-64
             openssl_arch: linux-x86_64
             packages: ""
-          - arch: arm64
+            cross_prefix: ""
+            
+          - name: linux-arm64
+            os: ubuntu-latest
+            target_os: linux
+            arch: arm64
             cc: aarch64-linux-gnu-gcc
             cxx: aarch64-linux-gnu-g++
             configure_arch: aarch64
@@ -28,7 +36,11 @@ jobs:
             openssl_arch: linux-aarch64
             packages: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
             cross_prefix: aarch64-linux-gnu-
-          - arch: armv7
+            
+          - name: linux-armv7
+            os: ubuntu-latest
+            target_os: linux
+            arch: armv7
             cc: arm-linux-gnueabihf-gcc
             cxx: arm-linux-gnueabihf-g++
             configure_arch: arm
@@ -36,9 +48,35 @@ jobs:
             openssl_arch: linux-armv4
             packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
             cross_prefix: arm-linux-gnueabihf-
+            
+          # Windows builds
+          - name: windows-x86_64
+            os: ubuntu-latest
+            target_os: mingw32
+            arch: x86_64
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            configure_arch: x86_64
+            cpu: x86-64
+            openssl_arch: mingw64
+            packages: "gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64"
+            cross_prefix: x86_64-w64-mingw32-
+            
+          - name: windows-x86
+            os: ubuntu-latest
+            target_os: mingw32
+            arch: x86
+            cc: i686-w64-mingw32-gcc
+            cxx: i686-w64-mingw32-g++
+            configure_arch: x86
+            cpu: i686
+            openssl_arch: mingw
+            packages: "gcc-mingw-w64-i686 g++-mingw-w64-i686"
+            cross_prefix: i686-w64-mingw32-
+            
       fail-fast: false
     
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     
     steps:
     - uses: actions/checkout@v4
@@ -67,30 +105,21 @@ jobs:
         cd openssl
         
         # Create installation directory
-        mkdir -p ${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl
+        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
         
-        # Configure OpenSSL based on architecture
-        if [ "${{ matrix.arch }}" = "x86_64" ]; then
-          ./Configure linux-x86_64 \
-            --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
-            --openssldir=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
-            no-shared \
-            no-tests
-        elif [ "${{ matrix.arch }}" = "arm64" ]; then
-          ./Configure linux-aarch64 \
-            --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
-            --openssldir=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
-            --cross-compile-prefix=aarch64-linux-gnu- \
-            no-shared \
-            no-tests
-        elif [ "${{ matrix.arch }}" = "armv7" ]; then
-          ./Configure linux-armv4 \
-            --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
-            --openssldir=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl \
-            --cross-compile-prefix=arm-linux-gnueabihf- \
-            no-shared \
-            no-tests
+        # Configure OpenSSL based on target
+        OPENSSL_FLAGS="
+          --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
+          --openssldir=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
+          no-shared
+          no-tests
+        "
+        
+        if [ "${{ matrix.cross_prefix }}" != "" ]; then
+          OPENSSL_FLAGS="$OPENSSL_FLAGS --cross-compile-prefix=${{ matrix.cross_prefix }}"
         fi
+        
+        ./Configure ${{ matrix.openssl_arch }} $OPENSSL_FLAGS
         
         # Build and install
         make -j$(nproc)
@@ -105,14 +134,15 @@ jobs:
     - name: Build FFmpeg
       working-directory: ffmpeg
       run: |
-        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
-        export SSL_DIR=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/openssl
+        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
+        export SSL_DIR=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
         
         # Base configuration
         CONFIGURE_FLAGS="
-          --prefix=${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/ffmpeg
+          --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
           --pkg-config=pkg-config
           --enable-version3
+          --target-os=${{ matrix.target_os }}
           --arch=${{ matrix.configure_arch }}
           --cpu=${{ matrix.cpu }}
           --enable-gpl
@@ -139,8 +169,8 @@ jobs:
           --disable-txtpages
         "
         
-        # Architecture-specific flags
-        if [ "${{ matrix.arch }}" != "x86_64" ]; then
+        # Cross-compilation flags
+        if [ "${{ matrix.cross_prefix }}" != "" ]; then
           CONFIGURE_FLAGS="$CONFIGURE_FLAGS
             --enable-cross-compile
             --cross-prefix=${{ matrix.cross_prefix }}
@@ -149,15 +179,26 @@ jobs:
           "
         fi
         
-        # ARM-specific optimizations
-        if [ "${{ matrix.arch }}" = "arm64" ]; then
-          CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
-        elif [ "${{ matrix.arch }}" = "armv7" ]; then
-          CONFIGURE_FLAGS="$CONFIGURE_FLAGS 
-            --enable-neon
-            --extra-cflags=-mfpu=neon
-            --extra-cflags=-mfloat-abi=hard
+        # Windows-specific flags
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS
+            --disable-w32threads
+            --enable-pthreads
+            --extra-libs=-lpthread
           "
+        fi
+        
+        # ARM-specific optimizations (Linux only)
+        if [ "${{ matrix.target_os }}" = "linux" ]; then
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
+          elif [ "${{ matrix.arch }}" = "armv7" ]; then
+            CONFIGURE_FLAGS="$CONFIGURE_FLAGS 
+              --enable-neon
+              --extra-cflags=-mfpu=neon
+              --extra-cflags=-mfloat-abi=hard
+            "
+          fi
         fi
         
         # Configure FFmpeg
@@ -170,16 +211,22 @@ jobs:
 
     - name: Create tarball
       run: |
-        cd ${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/ffmpeg
-        tar -czf ../../../ffmpeg-linux-${{ matrix.arch }}.tar.gz .
+        cd ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          # For Windows, create a zip file
+          zip -r ../../../ffmpeg-${{ matrix.name }}.zip .
+        else
+          # For Linux, create a tarball
+          tar -czf ../../../ffmpeg-${{ matrix.name }}.tar.gz .
+        fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ffmpeg-linux-${{ matrix.arch }}
+        name: ffmpeg-${{ matrix.name }}
         path: |
-          ${{ github.workspace }}/prebuilt/linux-${{ matrix.arch }}/ffmpeg/
-          ${{ github.workspace }}/ffmpeg-linux-${{ matrix.arch }}.tar.gz
+          ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/
+          ${{ github.workspace }}/ffmpeg-${{ matrix.name }}.*
 
   create-release:
     needs: build
@@ -195,6 +242,6 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: |
-          ffmpeg-linux-*/ffmpeg-linux-*.tar.gz
+          ffmpeg-*/ffmpeg-*.*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
