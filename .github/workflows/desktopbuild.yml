@@ -49,7 +49,7 @@ jobs:
             packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
             cross_prefix: arm-linux-gnueabihf-
             
-          # Windows builds (x86_64 and x86 only - ARM64 toolchain not available)
+          # Windows builds
           - name: windows-x86_64
             os: ubuntu-latest
             target_os: mingw32
@@ -59,7 +59,7 @@ jobs:
             configure_arch: x86_64
             cpu: x86-64
             openssl_arch: mingw64
-            packages: "gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64-tools"
+            packages: "gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64"
             cross_prefix: x86_64-w64-mingw32-
             
           - name: windows-x86
@@ -71,7 +71,7 @@ jobs:
             configure_arch: x86
             cpu: i686
             openssl_arch: mingw
-            packages: "gcc-mingw-w64-i686 g++-mingw-w64-i686 mingw-w64-tools"
+            packages: "gcc-mingw-w64-i686 g++-mingw-w64-i686"
             cross_prefix: i686-w64-mingw32-
             
       fail-fast: false
@@ -86,7 +86,20 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
+        # Retry on failure and use --fix-missing for network issues
+        sudo apt-get install -y --fix-missing \
+          build-essential \
+          pkg-config \
+          ninja-build \
+          yasm \
+          nasm \
+          autoconf \
+          automake \
+          libtool \
+          cmake \
+          perl \
+          ${{ matrix.packages }} || \
+        sudo apt-get install -y --fix-missing \
           build-essential \
           pkg-config \
           ninja-build \
@@ -116,7 +129,7 @@ jobs:
           export RC=${{ matrix.cross_prefix }}windres
         fi
         
-        # Configure OpenSSL (removed invalid no-docs option)
+        # Configure OpenSSL
         ./Configure ${{ matrix.openssl_arch }} \
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
           --openssldir=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
