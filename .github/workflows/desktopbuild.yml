@@ -127,13 +127,17 @@ jobs:
           export AR=${{ matrix.cross_prefix }}ar
           export RANLIB=${{ matrix.cross_prefix }}ranlib
           export RC=${{ matrix.cross_prefix }}windres
+          # Don't use --cross-compile-prefix when CC is already set
+          CROSS_PREFIX=""
+        else
+          CROSS_PREFIX="--cross-compile-prefix=${{ matrix.cross_prefix }}"
         fi
         
         # Configure OpenSSL
         ./Configure ${{ matrix.openssl_arch }} \
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
           --openssldir=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
-          --cross-compile-prefix=${{ matrix.cross_prefix }} \
+          $CROSS_PREFIX \
           no-shared \
           no-tests
         
