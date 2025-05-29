@@ -1,4 +1,4 @@
-name: Build FFmpeg for Android
+name: Build FFmpeg for Linux and Windows
 
 on:
   push:
@@ -7,241 +7,350 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  NDK_VERSION: "26.2.11394342"
-
 jobs:
   build:
     strategy:
       matrix:
-        arch: [arm64, armv7, armv7neon, x86_64, x86]
         include:
-          - arch: arm64
-            cross_prefix: aarch64-linux-android-
-            arch_flag: aarch64
-            cpu: armv8-a
-            cc: aarch64-linux-android21-clang
-            cxx: aarch64-linux-android21-clang++
-            openssl_arch: android-arm64
-            android_abi: arm64-v8a
-          - arch: armv7
-            cross_prefix: arm-linux-androideabi-
-            arch_flag: arm
-            cpu: armv7-a
-            cc: armv7a-linux-androideabi21-clang
-            cxx: armv7a-linux-androideabi21-clang++
-            openssl_arch: android-arm
-            android_abi: armeabi-v7a
-          - arch: armv7neon
-            cross_prefix: arm-linux-androideabi-
-            arch_flag: arm
-            cpu: armv7-a
-            cc: armv7a-linux-androideabi21-clang
-            cxx: armv7a-linux-androideabi21-clang++
-            openssl_arch: android-arm
-            android_abi: armeabi-v7a
-          - arch: x86_64
-            cross_prefix: x86_64-linux-android-
-            arch_flag: x86_64
+          # Linux builds
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target_os: linux
+            arch: x86_64
+            cc: gcc
+            cxx: g++
+            configure_arch: x86_64
             cpu: x86-64
-            cc: x86_64-linux-android21-clang
-            cxx: x86_64-linux-android21-clang++
-            openssl_arch: android-x86_64
-            android_abi: x86_64
-          - arch: x86
-            cross_prefix: i686-linux-android-
-            arch_flag: x86
+            openssl_arch: linux-x86_64
+            packages: ""
+            cross_prefix: ""
+            
+          - name: linux-arm64
+            os: ubuntu-latest
+            target_os: linux
+            arch: arm64
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
+            configure_arch: aarch64
+            cpu: armv8-a
+            openssl_arch: linux-aarch64
+            packages: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
+            cross_prefix: aarch64-linux-gnu-
+            
+          - name: linux-armv7
+            os: ubuntu-latest
+            target_os: linux
+            arch: armv7
+            cc: arm-linux-gnueabihf-gcc
+            cxx: arm-linux-gnueabihf-g++
+            configure_arch: arm
+            cpu: armv7-a
+            openssl_arch: linux-armv4
+            packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
+            cross_prefix: arm-linux-gnueabihf-
+            
+          # Windows builds
+          - name: windows-x86_64
+            os: ubuntu-latest
+            target_os: mingw32
+            arch: x86_64
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            configure_arch: x86_64
+            cpu: x86-64
+            openssl_arch: mingw64
+            packages: "gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64"
+            cross_prefix: x86_64-w64-mingw32-
+            
+          - name: windows-x86
+            os: ubuntu-latest
+            target_os: mingw32
+            arch: x86
+            cc: i686-w64-mingw32-gcc
+            cxx: i686-w64-mingw32-g++
+            configure_arch: x86
             cpu: i686
-            cc: i686-linux-android21-clang
-            cxx: i686-linux-android21-clang++
-            openssl_arch: android-x86
-            android_abi: x86
+            openssl_arch: mingw
+            packages: "gcc-mingw-w64-i686 g++-mingw-w64-i686"
+            cross_prefix: i686-w64-mingw32-
+            
       fail-fast: false
     
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     
-    env:
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      ANDROID_NDK_ROOT: ${{ github.workspace }}/android-ndk
-
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: 'recursive'
 
-    - name: Set up JDK
-      uses: actions/setup-java@v3
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-
-    - name: Download and Setup NDK
-      run: |
-        mkdir -p ${{ github.workspace }}/android-ndk
-        wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
-        unzip -q android-ndk-r26b-linux.zip
-        mv android-ndk-r26b/* ${{ github.workspace }}/android-ndk/
-        rm -rf android-ndk-r26b android-ndk-r26b-linux.zip
-        echo "ANDROID_NDK_ROOT=${{ github.workspace }}/android-ndk" >> $GITHUB_ENV
     - name: Install build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
+        sudo apt-get install -y --fix-missing \
+          build-essential \
           pkg-config \
           ninja-build \
-          libssl-dev \
           yasm \
           nasm \
           autoconf \
           automake \
           libtool \
           cmake \
-          perl
-    - name: Build CPU Features
-      run: |
-        git clone https://github.com/google/cpu_features.git
-        cd cpu_features
-        mkdir build && cd build
-        
-        # Create installation directory for CPU features
-        mkdir -p ${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/cpu-features/lib
-        
-        cmake .. -DCMAKE_SYSTEM_NAME=Android \
-          -DCMAKE_SYSTEM_VERSION=21 \
-          -DCMAKE_ANDROID_ARCH_ABI=${{ matrix.android_abi }} \
-          -DCMAKE_ANDROID_NDK=$ANDROID_NDK_ROOT \
-          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/cpu-features
-        
-        make -j$(nproc)
-        make install
+          perl \
+          ${{ matrix.packages }} || \
+        sudo apt-get install -y --fix-missing \
+          build-essential \
+          pkg-config \
+          ninja-build \
+          yasm \
+          nasm \
+          autoconf \
+          automake \
+          libtool \
+          cmake \
+          perl \
+          ${{ matrix.packages }}
+
     - name: Build OpenSSL
       run: |
         git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
         cd openssl
         
-        export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
-        export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-        
         # Create installation directory
-        mkdir -p ${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
+        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
         
-        # Set up environment for OpenSSL build
-        export ANDROID_API=21
-        
-        # Set the correct host for the architecture
-        case "${{ matrix.arch }}" in
-          "arm64")
-            HOST="aarch64-linux-android"
-            ;;
-          "armv7"|"armv7neon")
-            HOST="armv7a-linux-androideabi"
-            ;;
-          "x86")
-            HOST="i686-linux-android"
-            ;;
-          "x86_64")
-            HOST="x86_64-linux-android"
-            ;;
-        esac
+        # Set environment for cross-compilation
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          export CC=${{ matrix.cc }}
+          export CXX=${{ matrix.cxx }}
+          export AR=${{ matrix.cross_prefix }}ar
+          export RANLIB=${{ matrix.cross_prefix }}ranlib
+          export RC=${{ matrix.cross_prefix }}windres
+          CROSS_PREFIX=""
+        else
+          CROSS_PREFIX="--cross-compile-prefix=${{ matrix.cross_prefix }}"
+        fi
         
         # Configure OpenSSL
         ./Configure ${{ matrix.openssl_arch }} \
-          -D__ANDROID_API__=$ANDROID_API \
-          --prefix=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl \
-          --openssldir=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl \
-          -U__ANDROID_API__ \
-          -fPIC \
+          --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
+          --openssldir=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
+          $CROSS_PREFIX \
           no-shared \
-          no-tests \
-          no-comp \
-          no-engine \
-          no-dso \
-          no-async
+          no-tests
         
         # Build and install
-        make -j$(nproc) build_sw
+        make -j$(nproc)
         make install_sw
+
+    - name: Create OpenSSL pkg-config files
+      if: matrix.target_os == 'mingw32'
+      run: |
+        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig
+        
+        # Set the actual paths
+        SSL_PREFIX="${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl"
+        
+        # Create openssl.pc
+        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc << EOF
+        prefix=${SSL_PREFIX}
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
+        
+        Name: OpenSSL
+        Description: Secure Sockets Layer and cryptography libraries and tools
+        Version: 3.0.12
+        Requires: libssl libcrypto
+        EOF
+        
+        # Create libssl.pc
+        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc << EOF
+        prefix=${SSL_PREFIX}
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
+        
+        Name: OpenSSL-libssl
+        Description: Secure Sockets Layer and cryptography libraries
+        Version: 3.0.12
+        Requires: libcrypto
+        Libs: -L\${libdir} -lssl
+        Libs.private: -lws2_32 -lgdi32 -lcrypt32
+        Cflags: -I\${includedir}
+        EOF
+        
+        # Create libcrypto.pc
+        cat > ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc << EOF
+        prefix=${SSL_PREFIX}
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
+        
+        Name: OpenSSL-libcrypto  
+        Description: OpenSSL cryptography library
+        Version: 3.0.12
+        Libs: -L\${libdir} -lcrypto
+        Libs.private: -lws2_32 -lgdi32 -lcrypt32
+        Cflags: -I\${includedir}
+        EOF
+        
+        # Verify files were created and show their content
+        echo "=== OpenSSL pkg-config files created ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/
+        echo "=== Content of openssl.pc ==="
+        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc
+        echo "=== Content of libssl.pc ==="
+        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libssl.pc
+        echo "=== Content of libcrypto.pc ==="
+        cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/libcrypto.pc
+
+    - name: Verify OpenSSL installation
+      run: |
+        echo "=== OpenSSL installation verification ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/
+        echo "=== Include directory ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/include/
+        echo "=== Lib directory ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          echo "=== PKG_CONFIG_PATH test ==="
+          export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
+          pkg-config --exists openssl && echo "OpenSSL pkg-config found" || echo "OpenSSL pkg-config NOT found"
+          pkg-config --exists libssl && echo "libssl pkg-config found" || echo "libssl pkg-config NOT found"  
+          pkg-config --exists libcrypto && echo "libcrypto pkg-config found" || echo "libcrypto pkg-config NOT found"
+          echo "=== pkg-config output ==="
+          pkg-config --cflags --libs openssl || echo "Failed to get OpenSSL flags"
+        fi
+
     - name: Download and Extract FFmpeg
       run: |
         git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg
         cd ffmpeg
-        git checkout release/6.0
+        git checkout release/6.1
+
     - name: Build FFmpeg
       working-directory: ffmpeg
       run: |
-        export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-        export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
+        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
+        export SSL_DIR=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
         
-        EXTRA_FLAGS=""
-        if [ "${{ matrix.arch }}" = "armv7" ] || [ "${{ matrix.arch }}" = "armv7neon" ]; then
-          EXTRA_FLAGS="--extra-cflags=-mfpu=neon --extra-cflags=-mfloat-abi=softfp"
+        echo "=== Environment verification ==="
+        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+        echo "SSL_DIR: $SSL_DIR"
+        
+        # Base configuration
+        CONFIGURE_FLAGS="
+          --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
+          --pkg-config=pkg-config
+          --enable-version3
+          --target-os=${{ matrix.target_os }}
+          --arch=${{ matrix.configure_arch }}
+          --cpu=${{ matrix.cpu }}
+          --enable-gpl
+          --enable-nonfree
+          --enable-openssl
+          --enable-protocol=http
+          --enable-protocol=https
+          --enable-protocol=file
+          --enable-protocol=tcp
+          --extra-cflags=-I$SSL_DIR/include
+          --extra-ldflags=-L$SSL_DIR/lib
+          --enable-pic
+          --enable-optimizations
+          --enable-swscale
+          --enable-shared
+          --disable-static
+          --enable-pthreads
+          --disable-debug
+          --disable-doc
+          --disable-htmlpages
+          --disable-manpages
+          --disable-podpages
+          --disable-txtpages
+        "
+        
+        # Cross-compilation flags
+        if [ "${{ matrix.cross_prefix }}" != "" ]; then
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS
+            --enable-cross-compile
+            --cross-prefix=${{ matrix.cross_prefix }}
+            --cc=${{ matrix.cc }}
+            --cxx=${{ matrix.cxx }}
+          "
         fi
         
-        if [ "${{ matrix.arch }}" = "x86" ]; then
-          # Special handling for x86 to fix PIC relocation errors
-          EXTRA_FLAGS="$EXTRA_FLAGS --extra-cflags=-fPIC --extra-ldflags=-fPIC --extra-cxxflags=-fPIC"
-          # Disable ASM for x86 to avoid relocation issues
-          EXTRA_FLAGS="$EXTRA_FLAGS --disable-asm --disable-inline-asm"
+        # Windows-specific flags
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS
+            --disable-w32threads
+            --enable-pthreads
+            --extra-libs=-lpthread
+            --extra-libs=-lws2_32
+            --extra-libs=-lwinmm
+            --extra-libs=-lole32
+            --extra-libs=-lstrmiids
+            --extra-libs=-luuid
+            --extra-libs=-lgdi32
+            --extra-libs=-lcrypt32
+          "
         fi
         
-        # Add OpenSSL config
-        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl/lib/pkgconfig
-        export SSL_DIR=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/openssl
-        export CPU_FEATURES_DIR=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/cpu-features
+        # ARM-specific optimizations (Linux only)
+        if [ "${{ matrix.target_os }}" = "linux" ]; then
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
+          elif [ "${{ matrix.arch }}" = "armv7" ]; then  
+            CONFIGURE_FLAGS="$CONFIGURE_FLAGS 
+              --enable-neon
+              --extra-cflags=-mfpu=neon
+              --extra-cflags=-mfloat-abi=hard
+            "
+          fi
+        fi
         
-        ./configure \
-          --cross-prefix=${{ matrix.cross_prefix }} \
-          --sysroot=$TOOLCHAIN/sysroot \
-          --prefix=${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/ffmpeg \
-          --pkg-config=$(which pkg-config) \
-          --enable-version3 \
-          --arch=${{ matrix.arch_flag }} \
-          --cpu=${{ matrix.cpu }} \
-          --target-os=android \
-          --enable-neon \
-          --enable-asm \
-          --enable-inline-asm \
-          --enable-gpl \
-          --enable-openssl \
-          --enable-protocol=http \
-          --enable-protocol=https \
-          --enable-protocol=file \
-          --enable-protocol=tcp \
-          --extra-cflags="-I$SSL_DIR/include" \
-          --extra-ldflags="-L$SSL_DIR/lib" \
-          --extra-libs="-L$CPU_FEATURES_DIR/lib -lndk_compat" \
-          --ar=llvm-ar \
-          --cc=${{ matrix.cc }} \
-          --cxx=${{ matrix.cxx }} \
-          --ranlib=llvm-ranlib \
-          --strip=llvm-strip \
-          --nm=llvm-nm \
-          --disable-autodetect \
-          --enable-cross-compile \
-          --enable-pic \
-          --enable-jni \
-          --enable-optimizations \
-          --enable-swscale \
-          --disable-static \
-          --enable-shared \
-          --enable-pthreads \
-          --enable-v4l2-m2m \
-          --disable-outdev=fbdev \
-          --disable-indev=fbdev \
-          --enable-small \
-          --disable-xmm-clobber-test \
-          --disable-debug \
-          --enable-lto \
-          --disable-neon-clobber-test \
-          --disable-programs \
-          --enable-nonfree \
-          --disable-postproc \
-          $EXTRA_FLAGS
+        # Configure FFmpeg
+        echo "=== Configuring FFmpeg ==="
+        ./configure $CONFIGURE_FLAGS
+        
+        # Build
         make clean
         make -j$(nproc)
         make install
+
+    - name: Create tarball
+      run: |
+        cd ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          # For Windows, create a zip file
+          zip -r ../../../ffmpeg-${{ matrix.name }}.zip .
+        else
+          # For Linux, create a tarball
+          tar -czf ../../../ffmpeg-${{ matrix.name }}.tar.gz .
+        fi
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ffmpeg-android-${{ matrix.arch }}
-        path: ${{ github.workspace }}/prebuilt/android-${{ matrix.arch }}/ffmpeg/
+        name: ffmpeg-${{ matrix.name }}
+        path: |
+          ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/
+          ${{ github.workspace }}/ffmpeg-${{ matrix.name }}.*
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          ffmpeg-*/ffmpeg-*.*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
