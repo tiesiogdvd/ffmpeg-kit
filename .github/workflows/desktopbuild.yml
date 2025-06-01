@@ -131,13 +131,15 @@ jobs:
           CROSS_PREFIX="--cross-compile-prefix=${{ matrix.cross_prefix }}"
         fi
         
-        # Configure OpenSSL
+        # Configure OpenSSL for static linking
         ./Configure ${{ matrix.openssl_arch }} \
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
           --openssldir=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
           $CROSS_PREFIX \
           no-shared \
-          no-tests
+          no-tests \
+          no-dynamic-engine \
+          -static
         
         # Build and install
         make -j$(nproc)
@@ -156,12 +158,19 @@ jobs:
         # Ensure lib directory exists
         mkdir -p "$SSL_PREFIX/lib"
         
-        # For Windows, create pkg-config files
+        # Create pkg-config files for all platforms
+        mkdir -p "$SSL_PREFIX/lib/pkgconfig"
+        
+        # Windows-specific libraries
         if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          mkdir -p "$SSL_PREFIX/lib/pkgconfig"
-          
-          # Create openssl.pc
-          cat > "$SSL_PREFIX/lib/pkgconfig/openssl.pc" << EOF
+          SYSTEM_LIBS="-lws2_32 -lgdi32 -lcrypt32 -ladvapi32 -luser32 -lkernel32"
+        else
+          # Linux system libraries
+          SYSTEM_LIBS="-ldl -lpthread"
+        fi
+        
+        # Create openssl.pc
+        cat > "$SSL_PREFIX/lib/pkgconfig/openssl.pc" << EOF
         prefix=${SSL_PREFIX}
         exec_prefix=\${prefix}
         libdir=\${exec_prefix}/lib
@@ -172,9 +181,9 @@ jobs:
         Version: 3.0.12
         Requires: libssl libcrypto
         EOF
-          
-          # Create libssl.pc
-          cat > "$SSL_PREFIX/lib/pkgconfig/libssl.pc" << EOF
+        
+        # Create libssl.pc
+        cat > "$SSL_PREFIX/lib/pkgconfig/libssl.pc" << EOF
         prefix=${SSL_PREFIX}
         exec_prefix=\${prefix}
         libdir=\${exec_prefix}/lib
@@ -185,12 +194,12 @@ jobs:
         Version: 3.0.12
         Requires: libcrypto
         Libs: -L\${libdir} -lssl
-        Libs.private: -lws2_32 -lgdi32 -lcrypt32
+        Libs.private: ${SYSTEM_LIBS}
         Cflags: -I\${includedir}
         EOF
-          
-          # Create libcrypto.pc
-          cat > "$SSL_PREFIX/lib/pkgconfig/libcrypto.pc" << EOF
+        
+        # Create libcrypto.pc
+        cat > "$SSL_PREFIX/lib/pkgconfig/libcrypto.pc" << EOF
         prefix=${SSL_PREFIX}
         exec_prefix=\${prefix}
         libdir=\${exec_prefix}/lib
@@ -200,10 +209,9 @@ jobs:
         Description: OpenSSL cryptography library
         Version: 3.0.12
         Libs: -L\${libdir} -lcrypto
-        Libs.private: -lws2_32 -lgdi32 -lcrypt32
+        Libs.private: ${SYSTEM_LIBS}
         Cflags: -I\${includedir}
         EOF
-        fi
 
     - name: Verify OpenSSL installation
       run: |
@@ -213,19 +221,16 @@ jobs:
         ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/include/
         echo "=== Lib directory ==="
         ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/
-        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          echo "=== PKG_CONFIG_PATH test ==="
-          export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
-          pkg-config --exists openssl && echo "OpenSSL pkg-config found" || echo "OpenSSL pkg-config NOT found"
-          pkg-config --exists libssl && echo "libssl pkg-config found" || echo "libssl pkg-config NOT found"  
-          pkg-config --exists libcrypto && echo "libcrypto pkg-config found" || echo "libcrypto pkg-config NOT found"
-          echo "=== pkg-config output ==="
-          pkg-config --cflags --libs openssl || echo "Failed to get OpenSSL flags"
-          echo "=== pkg-config files content ==="
-          ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/
-          echo "--- openssl.pc ---"
-          cat ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig/openssl.pc || echo "No openssl.pc"
-        fi
+        echo "=== PKG_CONFIG_PATH test ==="
+        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
+        pkg-config --exists openssl && echo "OpenSSL pkg-config found" || echo "OpenSSL pkg-config NOT found"
+        pkg-config --exists libssl && echo "libssl pkg-config found" || echo "libssl pkg-config NOT found"  
+        pkg-config --exists libcrypto && echo "libcrypto pkg-config found" || echo "libcrypto pkg-config NOT found"
+        echo "=== pkg-config output ==="
+        pkg-config --cflags --libs --static openssl || echo "Failed to get OpenSSL flags"
+        echo "=== Static library verification ==="
+        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/libssl.a || echo "No libssl.a"
+        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/libcrypto.a || echo "No libcrypto.a"
 
     - name: Download and Extract FFmpeg
       run: |
@@ -233,7 +238,7 @@ jobs:
         cd ffmpeg
         git checkout release/6.1
 
-    - name: Build FFmpeg
+    - name: Build FFmpeg with Static OpenSSL
       working-directory: ffmpeg
       run: |
         export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
@@ -244,14 +249,12 @@ jobs:
         echo "SSL_DIR: $SSL_DIR"
         
         # Test if OpenSSL can be found
-        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          echo "=== Testing pkg-config before FFmpeg configure ==="
-          pkg-config --exists openssl && echo "✓ OpenSSL found" || echo "✗ OpenSSL NOT found"
-          pkg-config --cflags openssl || echo "Failed to get cflags"
-          pkg-config --libs openssl || echo "Failed to get libs"
-        fi
+        echo "=== Testing pkg-config before FFmpeg configure ==="
+        pkg-config --exists openssl && echo "✓ OpenSSL found" || echo "✗ OpenSSL NOT found"
+        pkg-config --cflags --static openssl || echo "Failed to get cflags"
+        pkg-config --libs --static openssl || echo "Failed to get libs"
         
-        # Base configuration
+        # Base configuration for static linking
         CONFIGURE_FLAGS="
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
           --pkg-config=pkg-config
@@ -268,6 +271,7 @@ jobs:
           --enable-protocol=tcp
           --extra-cflags=-I$SSL_DIR/include
           --extra-ldflags=-L$SSL_DIR/lib
+          --pkg-config-flags=--static
           --enable-pic
           --enable-optimizations
           --enable-swscale
@@ -292,11 +296,17 @@ jobs:
           "
         fi
         
-        # Windows-specific flags
+        # Platform-specific static linking flags
         if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          # Windows-specific flags for static linking
           CONFIGURE_FLAGS="$CONFIGURE_FLAGS
             --disable-w32threads
             --enable-pthreads
+            --extra-ldflags=-static-libgcc
+            --extra-ldflags=-static-libstdc++
+            --extra-libs=-static
+            --extra-libs=$SSL_DIR/lib/libssl.a
+            --extra-libs=$SSL_DIR/lib/libcrypto.a
             --extra-libs=-lpthread
             --extra-libs=-lws2_32
             --extra-libs=-lwinmm
@@ -305,6 +315,18 @@ jobs:
             --extra-libs=-luuid
             --extra-libs=-lgdi32
             --extra-libs=-lcrypt32
+            --extra-libs=-lbcrypt
+            --extra-libs=-ladvapi32
+            --extra-libs=-luser32
+            --extra-libs=-lkernel32
+          "
+        else
+          # Linux-specific static linking flags
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS
+            --extra-libs=$SSL_DIR/lib/libssl.a
+            --extra-libs=$SSL_DIR/lib/libcrypto.a
+            --extra-libs=-ldl
+            --extra-libs=-lpthread
           "
         fi
         
@@ -323,31 +345,53 @@ jobs:
         
         # Configure FFmpeg
         echo "=== Configuring FFmpeg ==="
+        echo "Configure flags: $CONFIGURE_FLAGS"
         ./configure $CONFIGURE_FLAGS
         
+        # Verify OpenSSL is detected correctly
+        echo "=== Checking FFmpeg configuration ==="
+        grep -i openssl config.log | tail -5 || echo "No OpenSSL references found"
+        grep -i "ENABLED.*openssl" config.h || echo "OpenSSL not enabled"
+        
         # Build
+        echo "=== Building FFmpeg ==="
         make clean
         make -j$(nproc)
         make install
+
+    - name: Verify Static Linking
+      run: |
+        echo "=== Verifying FFmpeg static libraries ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/
+        
+        # Check if OpenSSL symbols are included in FFmpeg libraries
+        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
+          echo "=== Checking for OpenSSL symbols in Windows libraries ==="
+          ${{ matrix.cross_prefix }}nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i ssl | head -5 || echo "No SSL symbols found"
+          ${{ matrix.cross_prefix }}objdump -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i ssl | head -5 || echo "No SSL dependencies found"
+        else
+          echo "=== Checking for OpenSSL symbols in Linux libraries ==="
+          nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i ssl | head -5 || echo "No SSL symbols found"
+        fi
 
     - name: Create tarball
       run: |
         cd ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
         if [ "${{ matrix.target_os }}" = "mingw32" ]; then
           # For Windows, create a zip file
-          zip -r ../../../ffmpeg-${{ matrix.name }}.zip .
+          zip -r ../../../ffmpeg-${{ matrix.name }}-static.zip .
         else
           # For Linux, create a tarball
-          tar -czf ../../../ffmpeg-${{ matrix.name }}.tar.gz .
+          tar -czf ../../../ffmpeg-${{ matrix.name }}-static.tar.gz .
         fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ffmpeg-${{ matrix.name }}
+        name: ffmpeg-${{ matrix.name }}-static
         path: |
           ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/
-          ${{ github.workspace }}/ffmpeg-${{ matrix.name }}.*
+          ${{ github.workspace }}/ffmpeg-${{ matrix.name }}-static.*
 
   create-release:
     needs: build
@@ -363,6 +407,6 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: |
-          ffmpeg-*/ffmpeg-*.*
+          ffmpeg-*-static/ffmpeg-*-static.*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
