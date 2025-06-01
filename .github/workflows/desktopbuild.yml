@@ -271,8 +271,8 @@ jobs:
           --enable-pic
           --enable-optimizations
           --enable-swscale
-          --enable-shared
-          --disable-static
+          --enable-static
+          --disable-shared
           --enable-pthreads
           --disable-debug
           --disable-doc
