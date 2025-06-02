@@ -1,4 +1,4 @@
-name: Build FFmpeg for Linux and Windows
+name: Build FFmpeg with Platform-Native TLS
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       matrix:
         include:
-          # Linux builds
+          # Linux builds (using GnuTLS instead of OpenSSL)
           - name: linux-x86_64
             os: ubuntu-latest
             target_os: linux
@@ -21,8 +21,9 @@ jobs:
             cxx: g++
             configure_arch: x86_64
             cpu: x86-64
-            packages: ""
+            packages: "libgnutls28-dev"
             cross_prefix: ""
+            tls_backend: gnutls
             
           - name: linux-arm64
             os: ubuntu-latest
@@ -32,8 +33,9 @@ jobs:
             cxx: aarch64-linux-gnu-g++
             configure_arch: aarch64
             cpu: armv8-a
-            packages: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
+            packages: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libgnutls28-dev:arm64"
             cross_prefix: aarch64-linux-gnu-
+            tls_backend: gnutls
             
           - name: linux-armv7
             os: ubuntu-latest
@@ -43,10 +45,11 @@ jobs:
             cxx: arm-linux-gnueabihf-g++
             configure_arch: arm
             cpu: armv7-a
-            packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
+            packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libgnutls28-dev:armhf"
             cross_prefix: arm-linux-gnueabihf-
+            tls_backend: gnutls
             
-          # Windows builds
+          # Windows builds (using SChannel)
           - name: windows-x86_64
             os: ubuntu-latest
             target_os: mingw32
@@ -57,6 +60,7 @@ jobs:
             cpu: x86-64
             packages: "gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64"
             cross_prefix: x86_64-w64-mingw32-
+            tls_backend: schannel
             
           - name: windows-x86
             os: ubuntu-latest
@@ -68,6 +72,32 @@ jobs:
             cpu: i686
             packages: "gcc-mingw-w64-i686 g++-mingw-w64-i686"
             cross_prefix: i686-w64-mingw32-
+            tls_backend: schannel
+            
+          # macOS builds (using Secure Transport)
+          - name: macos-x86_64
+            os: macos-latest
+            target_os: darwin
+            arch: x86_64
+            cc: clang
+            cxx: clang++
+            configure_arch: x86_64
+            cpu: x86-64
+            packages: ""
+            cross_prefix: ""
+            tls_backend: securetransport
+            
+          - name: macos-arm64
+            os: macos-latest
+            target_os: darwin
+            arch: arm64
+            cc: clang
+            cxx: clang++
+            configure_arch: arm64
+            cpu: armv8-a
+            packages: ""
+            cross_prefix: ""
+            tls_backend: securetransport
             
       fail-fast: false
     
@@ -78,8 +108,18 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Install build dependencies
+    - name: Install build dependencies (Linux)
+      if: matrix.target_os == 'linux'
       run: |
+        sudo apt-get update
+        
+        # Add additional architectures for cross-compilation
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          sudo dpkg --add-architecture arm64
+        elif [ "${{ matrix.arch }}" = "armv7" ]; then
+          sudo dpkg --add-architecture armhf
+        fi
+        
         sudo apt-get update
         sudo apt-get install -y --fix-missing \
           build-essential \
@@ -106,63 +146,27 @@ jobs:
           perl \
           ${{ matrix.packages }}
 
-    - name: Build mbedTLS
+    - name: Install build dependencies (Windows cross-compile)
+      if: matrix.target_os == 'mingw32'
       run: |
-        git clone --depth 1 --branch v3.5.0 https://github.com/Mbed-TLS/mbedtls.git
-        cd mbedtls
-        
-        # Create installation directory
-        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls
-        
-        # Configure for static-only build with cross-compilation support
-        CMAKE_FLAGS="-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls"
-        CMAKE_FLAGS="$CMAKE_FLAGS -DENABLE_PROGRAMS=OFF"
-        CMAKE_FLAGS="$CMAKE_FLAGS -DENABLE_TESTING=OFF"
-        CMAKE_FLAGS="$CMAKE_FLAGS -DBUILD_SHARED_LIBS=OFF"
-        CMAKE_FLAGS="$CMAKE_FLAGS -DUSE_STATIC_MBEDTLS_LIBRARY=ON"
-        CMAKE_FLAGS="$CMAKE_FLAGS -DUSE_SHARED_MBEDTLS_LIBRARY=OFF"
-        
-        if [ "${{ matrix.cross_prefix }}" != "" ]; then
-          CMAKE_FLAGS="$CMAKE_FLAGS -DCMAKE_C_COMPILER=${{ matrix.cc }}"
-          CMAKE_FLAGS="$CMAKE_FLAGS -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}"
-        fi
-        
-        cmake . -B build $CMAKE_FLAGS
-        make -C build -j$(nproc)
-        make -C build install
+        sudo apt-get update
+        sudo apt-get install -y --fix-missing \
+          build-essential \
+          pkg-config \
+          ninja-build \
+          yasm \
+          nasm \
+          autoconf \
+          automake \
+          libtool \
+          cmake \
+          perl \
+          ${{ matrix.packages }}
 
-    - name: Create mbedTLS pkg-config files
+    - name: Install build dependencies (macOS)
+      if: matrix.target_os == 'darwin'
       run: |
-        MBEDTLS_PREFIX="${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls"
-        mkdir -p "$MBEDTLS_PREFIX/lib/pkgconfig"
-        
-        # Create mbedtls.pc
-        cat > "$MBEDTLS_PREFIX/lib/pkgconfig/mbedtls.pc" << EOF
-        prefix=${MBEDTLS_PREFIX}
-        exec_prefix=\${prefix}
-        libdir=\${exec_prefix}/lib
-        includedir=\${prefix}/include
-        
-        Name: mbedTLS
-        Description: Light-weight cryptographic and SSL/TLS library
-        Version: 3.5.0
-        Requires: 
-        Libs: -L\${libdir} -lmbedtls -lmbedx509 -lmbedcrypto
-        Cflags: -I\${includedir}
-        EOF
-
-    - name: Verify mbedTLS installation
-      run: |
-        echo "=== mbedTLS installation verification ==="
-        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/
-        echo "=== Include directory ==="
-        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/include/
-        echo "=== Lib directory ==="
-        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/
-        echo "=== Static library verification ==="
-        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/libmbedtls.a || echo "No libmbedtls.a"
-        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/libmbedx509.a || echo "No libmbedx509.a"
-        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/libmbedcrypto.a || echo "No libmbedcrypto.a"
+        brew install pkg-config yasm nasm autoconf automake libtool cmake
 
     - name: Download and Extract FFmpeg
       run: |
@@ -170,17 +174,15 @@ jobs:
         cd ffmpeg
         git checkout release/6.1
 
-    - name: Build FFmpeg with Static mbedTLS
+    - name: Build FFmpeg
       working-directory: ffmpeg
       run: |
-        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/pkgconfig:$PKG_CONFIG_PATH
-        export MBEDTLS_DIR=${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls
+        # Create installation directory
+        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
         
-        echo "=== Environment verification ==="
-        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-        echo "MBEDTLS_DIR: $MBEDTLS_DIR"
+        echo "=== Building FFmpeg with ${{ matrix.tls_backend }} TLS backend ==="
         
-        # Base configuration for static linking with embedded mbedTLS
+        # Base configuration
         CONFIGURE_FLAGS="
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
           --pkg-config=pkg-config
@@ -190,17 +192,11 @@ jobs:
           --cpu=${{ matrix.cpu }}
           --enable-gpl
           --enable-nonfree
-          --enable-mbedtls
+          --enable-${{ matrix.tls_backend }}
           --enable-protocol=http
           --enable-protocol=https
           --enable-protocol=file
           --enable-protocol=tcp
-          --extra-cflags=-I$MBEDTLS_DIR/include
-          --extra-ldflags=-L$MBEDTLS_DIR/lib
-          --extra-libs=-lmbedtls
-          --extra-libs=-lmbedx509
-          --extra-libs=-lmbedcrypto
-          --pkg-config-flags=--static
           --enable-pic
           --enable-optimizations
           --enable-swscale
@@ -213,6 +209,7 @@ jobs:
           --disable-manpages
           --disable-podpages
           --disable-txtpages
+          --disable-network
         "
         
         # Cross-compilation flags
@@ -225,15 +222,12 @@ jobs:
           "
         fi
         
-        # Platform-specific static linking flags
+        # Platform-specific flags
         if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          # Windows-specific flags for static linking
+          # Windows with SChannel
           CONFIGURE_FLAGS="$CONFIGURE_FLAGS
             --disable-w32threads
             --enable-pthreads
-            --extra-ldflags=-static-libgcc
-            --extra-ldflags=-static-libstdc++
-            --extra-libs=-static
             --extra-libs=-lpthread
             --extra-libs=-lws2_32
             --extra-libs=-lwinmm
@@ -241,21 +235,31 @@ jobs:
             --extra-libs=-lstrmiids
             --extra-libs=-luuid
             --extra-libs=-lgdi32
-            --extra-libs=-lbcrypt
-            --extra-libs=-ladvapi32
-            --extra-libs=-luser32
-            --extra-libs=-lkernel32
+            --extra-libs=-lsecur32
+            --extra-libs=-lcrypt32
           "
-        else
-          # Linux-specific static linking flags
+        elif [ "${{ matrix.target_os }}" = "darwin" ]; then
+          # macOS with Secure Transport
           CONFIGURE_FLAGS="$CONFIGURE_FLAGS
-            --extra-libs=-ldl
-            --extra-libs=-lpthread
+            --enable-videotoolbox
+            --enable-audiotoolbox
           "
-        fi
-        
-        # ARM-specific optimizations (Linux only)
-        if [ "${{ matrix.target_os }}" = "linux" ]; then
+          
+          # macOS architecture-specific flags
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            CONFIGURE_FLAGS="$CONFIGURE_FLAGS
+              --enable-cross-compile
+              --target-os=darwin
+              --arch=arm64
+              --cc='clang -arch arm64'
+              --cxx='clang++ -arch arm64'
+            "
+          fi
+        elif [ "${{ matrix.target_os }}" = "linux" ]; then
+          # Linux with GnuTLS
+          CONFIGURE_FLAGS="$CONFIGURE_FLAGS"
+          
+          # ARM-specific optimizations
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-neon"
           elif [ "${{ matrix.arch }}" = "armv7" ]; then  
@@ -272,53 +276,47 @@ jobs:
         echo "Configure flags: $CONFIGURE_FLAGS"
         ./configure $CONFIGURE_FLAGS
         
-        # Verify mbedTLS is detected correctly
-        echo "=== Checking FFmpeg configuration ==="
-        grep -i mbedtls config.log | tail -5 || echo "No mbedTLS references found"
-        grep -i "ENABLED.*mbedtls" config.h || echo "mbedTLS not enabled"
-        
         # Build
-        echo "=== Building FFmpeg ==="
         make clean
         make -j$(nproc)
         make install
 
-    - name: Verify mbedTLS is Embedded in FFmpeg
+    - name: Verify build
       run: |
-        echo "=== Verifying FFmpeg static libraries ==="
+        echo "=== FFmpeg installation verification ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/
+        echo "=== Lib directory ==="
         ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/
+        echo "=== Bin directory ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/bin/ || echo "No bin directory"
         
-        # Check if mbedTLS symbols are embedded in FFmpeg libraries
-        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          echo "=== Checking for mbedTLS symbols in Windows libraries ==="
-          ${{ matrix.cross_prefix }}nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls | head -5 || echo "No mbedTLS symbols found"
-          echo "=== Verifying no external mbedTLS dependencies ==="
-          ${{ matrix.cross_prefix }}objdump -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls || echo "No external mbedTLS dependencies (good!)"
-        else
-          echo "=== Checking for mbedTLS symbols in Linux libraries ==="
-          nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls | head -5 || echo "No mbedTLS symbols found"
-          echo "=== Verifying no external mbedTLS dependencies ==="
-          objdump -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls || echo "No external mbedTLS dependencies (good!)"
-        fi
+        # Test static libraries exist
+        for lib in libavformat libavcodec libavfilter libavdevice libswresample libswscale libavutil; do
+          if [ -f "${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/${lib}.a" ]; then
+            echo "✓ ${lib}.a found"
+          else
+            echo "✗ ${lib}.a NOT found"
+          fi
+        done
 
     - name: Create tarball
       run: |
         cd ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
         if [ "${{ matrix.target_os }}" = "mingw32" ]; then
           # For Windows, create a zip file
-          zip -r ../../../ffmpeg-${{ matrix.name }}-static.zip .
+          zip -r ../../../ffmpeg-${{ matrix.name }}.zip .
         else
-          # For Linux, create a tarball
-          tar -czf ../../../ffmpeg-${{ matrix.name }}-static.tar.gz .
+          # For Linux/macOS, create a tarball
+          tar -czf ../../../ffmpeg-${{ matrix.name }}.tar.gz .
         fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ffmpeg-${{ matrix.name }}-static
+        name: ffmpeg-${{ matrix.name }}
         path: |
           ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/
-          ${{ github.workspace }}/ffmpeg-${{ matrix.name }}-static.*
+          ${{ github.workspace }}/ffmpeg-${{ matrix.name }}.*
 
   create-release:
     needs: build
@@ -334,6 +332,6 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: |
-          ffmpeg-*-static/ffmpeg-*-static.*
+          ffmpeg-*/ffmpeg-*.*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
