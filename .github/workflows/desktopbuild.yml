@@ -21,7 +21,6 @@ jobs:
             cxx: g++
             configure_arch: x86_64
             cpu: x86-64
-            openssl_arch: linux-x86_64
             packages: ""
             cross_prefix: ""
             
@@ -33,7 +32,6 @@ jobs:
             cxx: aarch64-linux-gnu-g++
             configure_arch: aarch64
             cpu: armv8-a
-            openssl_arch: linux-aarch64
             packages: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
             cross_prefix: aarch64-linux-gnu-
             
@@ -45,7 +43,6 @@ jobs:
             cxx: arm-linux-gnueabihf-g++
             configure_arch: arm
             cpu: armv7-a
-            openssl_arch: linux-armv4
             packages: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
             cross_prefix: arm-linux-gnueabihf-
             
@@ -58,7 +55,6 @@ jobs:
             cxx: x86_64-w64-mingw32-g++
             configure_arch: x86_64
             cpu: x86-64
-            openssl_arch: mingw64
             packages: "gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64"
             cross_prefix: x86_64-w64-mingw32-
             
@@ -70,7 +66,6 @@ jobs:
             cxx: i686-w64-mingw32-g++
             configure_arch: x86
             cpu: i686
-            openssl_arch: mingw
             packages: "gcc-mingw-w64-i686 g++-mingw-w64-i686"
             cross_prefix: i686-w64-mingw32-
             
@@ -111,126 +106,63 @@ jobs:
           perl \
           ${{ matrix.packages }}
 
-    - name: Build OpenSSL
+    - name: Build mbedTLS
       run: |
-        git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
-        cd openssl
+        git clone --depth 1 --branch v3.5.0 https://github.com/Mbed-TLS/mbedtls.git
+        cd mbedtls
         
         # Create installation directory
-        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
+        mkdir -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls
         
-        # Set environment for cross-compilation
-        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          export CC=${{ matrix.cc }}
-          export CXX=${{ matrix.cxx }}
-          export AR=${{ matrix.cross_prefix }}ar
-          export RANLIB=${{ matrix.cross_prefix }}ranlib
-          export RC=${{ matrix.cross_prefix }}windres
-          CROSS_PREFIX=""
-        else
-          CROSS_PREFIX="--cross-compile-prefix=${{ matrix.cross_prefix }}"
+        # Configure for static-only build with cross-compilation support
+        CMAKE_FLAGS="-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls"
+        CMAKE_FLAGS="$CMAKE_FLAGS -DENABLE_PROGRAMS=OFF"
+        CMAKE_FLAGS="$CMAKE_FLAGS -DENABLE_TESTING=OFF"
+        CMAKE_FLAGS="$CMAKE_FLAGS -DBUILD_SHARED_LIBS=OFF"
+        CMAKE_FLAGS="$CMAKE_FLAGS -DUSE_STATIC_MBEDTLS_LIBRARY=ON"
+        CMAKE_FLAGS="$CMAKE_FLAGS -DUSE_SHARED_MBEDTLS_LIBRARY=OFF"
+        
+        if [ "${{ matrix.cross_prefix }}" != "" ]; then
+          CMAKE_FLAGS="$CMAKE_FLAGS -DCMAKE_C_COMPILER=${{ matrix.cc }}"
+          CMAKE_FLAGS="$CMAKE_FLAGS -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}"
         fi
         
-        # Configure OpenSSL for static linking
-        ./Configure ${{ matrix.openssl_arch }} \
-          --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
-          --openssldir=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl \
-          $CROSS_PREFIX \
-          no-shared \
-          no-tests \
-          no-dynamic-engine \
-          -static
-        
-        # Build and install
-        make -j$(nproc)
-        make install_sw
+        cmake . -B build $CMAKE_FLAGS
+        make -C build -j$(nproc)
+        make -C build install
 
-    - name: Fix OpenSSL lib directory and create pkg-config files
+    - name: Create mbedTLS pkg-config files
       run: |
-        SSL_PREFIX="${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl"
+        MBEDTLS_PREFIX="${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls"
+        mkdir -p "$MBEDTLS_PREFIX/lib/pkgconfig"
         
-        # Check if OpenSSL installed to lib64 instead of lib
-        if [ -d "$SSL_PREFIX/lib64" ] && [ ! -d "$SSL_PREFIX/lib" ]; then
-          echo "=== Moving lib64 to lib ==="
-          mv "$SSL_PREFIX/lib64" "$SSL_PREFIX/lib"
-        fi
-        
-        # Ensure lib directory exists
-        mkdir -p "$SSL_PREFIX/lib"
-        
-        # Create pkg-config files for all platforms
-        mkdir -p "$SSL_PREFIX/lib/pkgconfig"
-        
-        # Windows-specific libraries
-        if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          SYSTEM_LIBS="-lws2_32 -lgdi32 -lcrypt32 -ladvapi32 -luser32 -lkernel32"
-        else
-          # Linux system libraries
-          SYSTEM_LIBS="-ldl -lpthread"
-        fi
-        
-        # Create openssl.pc
-        cat > "$SSL_PREFIX/lib/pkgconfig/openssl.pc" << EOF
-        prefix=${SSL_PREFIX}
+        # Create mbedtls.pc
+        cat > "$MBEDTLS_PREFIX/lib/pkgconfig/mbedtls.pc" << EOF
+        prefix=${MBEDTLS_PREFIX}
         exec_prefix=\${prefix}
         libdir=\${exec_prefix}/lib
         includedir=\${prefix}/include
         
-        Name: OpenSSL
-        Description: Secure Sockets Layer and cryptography libraries and tools
-        Version: 3.0.12
-        Requires: libssl libcrypto
-        EOF
-        
-        # Create libssl.pc
-        cat > "$SSL_PREFIX/lib/pkgconfig/libssl.pc" << EOF
-        prefix=${SSL_PREFIX}
-        exec_prefix=\${prefix}
-        libdir=\${exec_prefix}/lib
-        includedir=\${prefix}/include
-        
-        Name: OpenSSL-libssl
-        Description: Secure Sockets Layer and cryptography libraries
-        Version: 3.0.12
-        Requires: libcrypto
-        Libs: -L\${libdir} -lssl
-        Libs.private: ${SYSTEM_LIBS}
-        Cflags: -I\${includedir}
-        EOF
-        
-        # Create libcrypto.pc
-        cat > "$SSL_PREFIX/lib/pkgconfig/libcrypto.pc" << EOF
-        prefix=${SSL_PREFIX}
-        exec_prefix=\${prefix}
-        libdir=\${exec_prefix}/lib
-        includedir=\${prefix}/include
-        
-        Name: OpenSSL-libcrypto
-        Description: OpenSSL cryptography library
-        Version: 3.0.12
-        Libs: -L\${libdir} -lcrypto
-        Libs.private: ${SYSTEM_LIBS}
+        Name: mbedTLS
+        Description: Light-weight cryptographic and SSL/TLS library
+        Version: 3.5.0
+        Requires: 
+        Libs: -L\${libdir} -lmbedtls -lmbedx509 -lmbedcrypto
         Cflags: -I\${includedir}
         EOF
 
-    - name: Verify OpenSSL installation
+    - name: Verify mbedTLS installation
       run: |
-        echo "=== OpenSSL installation verification ==="
-        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/
+        echo "=== mbedTLS installation verification ==="
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/
         echo "=== Include directory ==="
-        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/include/
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/include/
         echo "=== Lib directory ==="
-        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/
-        echo "=== PKG_CONFIG_PATH test ==="
-        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
-        pkg-config --exists openssl && echo "OpenSSL pkg-config found" || echo "OpenSSL pkg-config NOT found"
-        pkg-config --exists libssl && echo "libssl pkg-config found" || echo "libssl pkg-config NOT found"  
-        pkg-config --exists libcrypto && echo "libcrypto pkg-config found" || echo "libcrypto pkg-config NOT found"
-        echo "=== pkg-config output ==="
-        pkg-config --cflags --libs --static openssl || echo "Failed to get OpenSSL flags"
+        ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/
         echo "=== Static library verification ==="
-        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/libssl.a || echo "No libssl.a"
-        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/libcrypto.a || echo "No libcrypto.a"
+        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/libmbedtls.a || echo "No libmbedtls.a"
+        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/libmbedx509.a || echo "No libmbedx509.a"
+        file ${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/libmbedcrypto.a || echo "No libmbedcrypto.a"
 
     - name: Download and Extract FFmpeg
       run: |
@@ -238,23 +170,17 @@ jobs:
         cd ffmpeg
         git checkout release/6.1
 
-    - name: Build FFmpeg with Static OpenSSL
+    - name: Build FFmpeg with Static mbedTLS
       working-directory: ffmpeg
       run: |
-        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
-        export SSL_DIR=${{ github.workspace }}/prebuilt/${{ matrix.name }}/openssl
+        export PKG_CONFIG_PATH=${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls/lib/pkgconfig:$PKG_CONFIG_PATH
+        export MBEDTLS_DIR=${{ github.workspace }}/prebuilt/${{ matrix.name }}/mbedtls
         
         echo "=== Environment verification ==="
         echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-        echo "SSL_DIR: $SSL_DIR"
+        echo "MBEDTLS_DIR: $MBEDTLS_DIR"
         
-        # Test if OpenSSL can be found
-        echo "=== Testing pkg-config before FFmpeg configure ==="
-        pkg-config --exists openssl && echo "✓ OpenSSL found" || echo "✗ OpenSSL NOT found"
-        pkg-config --cflags --static openssl || echo "Failed to get cflags"
-        pkg-config --libs --static openssl || echo "Failed to get libs"
-        
-        # Base configuration for static linking
+        # Base configuration for static linking with embedded mbedTLS
         CONFIGURE_FLAGS="
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
           --pkg-config=pkg-config
@@ -264,13 +190,16 @@ jobs:
           --cpu=${{ matrix.cpu }}
           --enable-gpl
           --enable-nonfree
-          --enable-openssl
+          --enable-mbedtls
           --enable-protocol=http
           --enable-protocol=https
           --enable-protocol=file
           --enable-protocol=tcp
-          --extra-cflags=-I$SSL_DIR/include
-          --extra-ldflags=-L$SSL_DIR/lib
+          --extra-cflags=-I$MBEDTLS_DIR/include
+          --extra-ldflags=-L$MBEDTLS_DIR/lib
+          --extra-libs=-lmbedtls
+          --extra-libs=-lmbedx509
+          --extra-libs=-lmbedcrypto
           --pkg-config-flags=--static
           --enable-pic
           --enable-optimizations
@@ -305,8 +234,6 @@ jobs:
             --extra-ldflags=-static-libgcc
             --extra-ldflags=-static-libstdc++
             --extra-libs=-static
-            --extra-libs=$SSL_DIR/lib/libssl.a
-            --extra-libs=$SSL_DIR/lib/libcrypto.a
             --extra-libs=-lpthread
             --extra-libs=-lws2_32
             --extra-libs=-lwinmm
@@ -314,7 +241,6 @@ jobs:
             --extra-libs=-lstrmiids
             --extra-libs=-luuid
             --extra-libs=-lgdi32
-            --extra-libs=-lcrypt32
             --extra-libs=-lbcrypt
             --extra-libs=-ladvapi32
             --extra-libs=-luser32
@@ -323,8 +249,6 @@ jobs:
         else
           # Linux-specific static linking flags
           CONFIGURE_FLAGS="$CONFIGURE_FLAGS
-            --extra-libs=$SSL_DIR/lib/libssl.a
-            --extra-libs=$SSL_DIR/lib/libcrypto.a
             --extra-libs=-ldl
             --extra-libs=-lpthread
           "
@@ -348,10 +272,10 @@ jobs:
         echo "Configure flags: $CONFIGURE_FLAGS"
         ./configure $CONFIGURE_FLAGS
         
-        # Verify OpenSSL is detected correctly
+        # Verify mbedTLS is detected correctly
         echo "=== Checking FFmpeg configuration ==="
-        grep -i openssl config.log | tail -5 || echo "No OpenSSL references found"
-        grep -i "ENABLED.*openssl" config.h || echo "OpenSSL not enabled"
+        grep -i mbedtls config.log | tail -5 || echo "No mbedTLS references found"
+        grep -i "ENABLED.*mbedtls" config.h || echo "mbedTLS not enabled"
         
         # Build
         echo "=== Building FFmpeg ==="
@@ -359,19 +283,22 @@ jobs:
         make -j$(nproc)
         make install
 
-    - name: Verify Static Linking
+    - name: Verify mbedTLS is Embedded in FFmpeg
       run: |
         echo "=== Verifying FFmpeg static libraries ==="
         ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/
         
-        # Check if OpenSSL symbols are included in FFmpeg libraries
+        # Check if mbedTLS symbols are embedded in FFmpeg libraries
         if [ "${{ matrix.target_os }}" = "mingw32" ]; then
-          echo "=== Checking for OpenSSL symbols in Windows libraries ==="
-          ${{ matrix.cross_prefix }}nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i ssl | head -5 || echo "No SSL symbols found"
-          ${{ matrix.cross_prefix }}objdump -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i ssl | head -5 || echo "No SSL dependencies found"
+          echo "=== Checking for mbedTLS symbols in Windows libraries ==="
+          ${{ matrix.cross_prefix }}nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls | head -5 || echo "No mbedTLS symbols found"
+          echo "=== Verifying no external mbedTLS dependencies ==="
+          ${{ matrix.cross_prefix }}objdump -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls || echo "No external mbedTLS dependencies (good!)"
         else
-          echo "=== Checking for OpenSSL symbols in Linux libraries ==="
-          nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i ssl | head -5 || echo "No SSL symbols found"
+          echo "=== Checking for mbedTLS symbols in Linux libraries ==="
+          nm ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls | head -5 || echo "No mbedTLS symbols found"
+          echo "=== Verifying no external mbedTLS dependencies ==="
+          objdump -p ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/libavformat.a | grep -i mbedtls || echo "No external mbedTLS dependencies (good!)"
         fi
 
     - name: Create tarball
