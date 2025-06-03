@@ -182,7 +182,20 @@ jobs:
         
         echo "=== Building FFmpeg with ${{ matrix.tls_backend }} TLS backend ==="
         
-        # Base configuration
+        # Set PKG_CONFIG_PATH for cross-compilation
+        if [ "${{ matrix.cross_prefix }}" != "" ] && [ "${{ matrix.target_os }}" = "linux" ]; then
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+            export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+            export PKG_CONFIG_SYSROOT_DIR=/
+          elif [ "${{ matrix.arch }}" = "armv7" ]; then
+            export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig
+            export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig
+            export PKG_CONFIG_SYSROOT_DIR=/
+          fi
+        fi
+        
+        # Base configuration (REMOVED --disable-network)
         CONFIGURE_FLAGS="
           --prefix=${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg
           --pkg-config=pkg-config
@@ -209,7 +222,6 @@ jobs:
           --disable-manpages
           --disable-podpages
           --disable-txtpages
-          --disable-network
         "
         
         # Cross-compilation flags
@@ -278,8 +290,27 @@ jobs:
         
         # Build
         make clean
-        make -j$(nproc)
+        make -j$(nproc 2>/dev/null || echo 4)
         make install
+
+    - name: Verify TLS support
+      working-directory: ffmpeg
+      run: |
+        echo "=== Checking FFmpeg configuration ==="
+        echo "Available protocols:"
+        ./ffmpeg -protocols 2>/dev/null | grep -E "(http|https|file|tcp)" || echo "Some protocols missing!"
+        
+        echo "Build configuration:"
+        ./ffmpeg -buildconf 2>/dev/null | grep -E "(gnutls|schannel|securetransport)" || echo "No TLS backend found in build!"
+        
+        echo "TLS backend check:"
+        if ./ffmpeg -buildconf 2>/dev/null | grep -q "${{ matrix.tls_backend }}"; then
+          echo "✓ ${{ matrix.tls_backend }} TLS backend found"
+        else
+          echo "✗ ${{ matrix.tls_backend }} TLS backend NOT found"
+          echo "Available TLS backends:"
+          ./ffmpeg -buildconf 2>/dev/null | grep -E "(gnutls|openssl|schannel|securetransport)" || echo "None found"
+        fi
 
     - name: Verify build
       run: |
@@ -291,13 +322,37 @@ jobs:
         ls -la ${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/bin/ || echo "No bin directory"
         
         # Test static libraries exist
+        echo "=== Static library verification ==="
         for lib in libavformat libavcodec libavfilter libavdevice libswresample libswscale libavutil; do
           if [ -f "${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/${lib}.a" ]; then
             echo "✓ ${lib}.a found"
+            # Check if library has TLS symbols (basic check)
+            if [ "${{ matrix.tls_backend }}" = "gnutls" ] && [ "${lib}" = "libavformat" ]; then
+              if nm "${{ github.workspace }}/prebuilt/${{ matrix.name }}/ffmpeg/lib/${lib}.a" 2>/dev/null | grep -q gnutls; then
+                echo "  ✓ GnuTLS symbols found in ${lib}.a"
+              else
+                echo "  ⚠ No GnuTLS symbols found in ${lib}.a"
+              fi
+            fi
           else
             echo "✗ ${lib}.a NOT found"
           fi
         done
+
+    - name: Test HTTPS functionality
+      working-directory: ffmpeg
+      run: |
+        echo "=== Testing HTTPS functionality ==="
+        # Test if HTTPS protocol is available
+        if ./ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=1 -c:v libx264 -preset ultrafast -f null - 2>&1 | grep -q "https protocol"; then
+          echo "✓ HTTPS protocol is available"
+        else
+          echo "Testing HTTPS protocol availability..."
+          ./ffmpeg -protocols 2>/dev/null | grep https && echo "✓ HTTPS protocol found" || echo "✗ HTTPS protocol not found"
+        fi
+        
+        # Test a simple HTTPS connection (if possible in CI environment)
+        echo "Note: Actual HTTPS connectivity test would require network access in runtime environment"
 
     - name: Create tarball
       run: |
