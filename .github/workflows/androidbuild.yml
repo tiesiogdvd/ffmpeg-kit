@@ -83,6 +83,7 @@ jobs:
         mv android-ndk-r26b/* ${{ github.workspace }}/android-ndk/
         rm -rf android-ndk-r26b android-ndk-r26b-linux.zip
         echo "ANDROID_NDK_ROOT=${{ github.workspace }}/android-ndk" >> $GITHUB_ENV
+
     - name: Install build dependencies
       run: |
         sudo apt-get update
@@ -97,6 +98,7 @@ jobs:
           libtool \
           cmake \
           perl
+
     - name: Build CPU Features
       run: |
         git clone https://github.com/google/cpu_features.git
@@ -114,6 +116,7 @@ jobs:
         
         make -j$(nproc)
         make install
+
     - name: Build OpenSSL
       run: |
         git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
@@ -161,11 +164,13 @@ jobs:
         # Build and install
         make -j$(nproc) build_sw
         make install_sw
+
     - name: Download and Extract FFmpeg
       run: |
         git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg
         cd ffmpeg
         git checkout release/6.0
+
     - name: Build FFmpeg
       working-directory: ffmpeg
       run: |
@@ -220,6 +225,21 @@ jobs:
           --enable-cross-compile \
           --enable-pic \
           --enable-jni \
+          --enable-mediacodec \
+          --enable-decoder=h264_mediacodec \
+          --enable-decoder=hevc_mediacodec \
+          --enable-decoder=mpeg2_mediacodec \
+          --enable-decoder=mpeg4_mediacodec \
+          --enable-decoder=vp8_mediacodec \
+          --enable-decoder=vp9_mediacodec \
+          --enable-decoder=av1_mediacodec \
+          --enable-hwaccel=h264_mediacodec \
+          --enable-hwaccel=hevc_mediacodec \
+          --enable-hwaccel=mpeg2_mediacodec \
+          --enable-hwaccel=mpeg4_mediacodec \
+          --enable-hwaccel=vp8_mediacodec \
+          --enable-hwaccel=vp9_mediacodec \
+          --enable-hwaccel=av1_mediacodec \
           --enable-optimizations \
           --enable-swscale \
           --disable-static \
@@ -240,6 +260,7 @@ jobs:
         make clean
         make -j$(nproc)
         make install
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
